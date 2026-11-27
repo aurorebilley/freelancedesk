@@ -43,6 +43,15 @@ Pour l’identité serveur, le rôle `roles/datastore.user` couvre les lectures 
 
 Le bouton Google ouvre la fenêtre de connexion Firebase. Firebase Authentication gère aussi l’envoi et le traitement des liens de réinitialisation. L’inscription par e-mail ne requiert aucune validation d’adresse. [Connexion Google](https://firebase.google.com/docs/auth/web/google-signin) · [Domaines autorisés](https://firebase.google.com/docs/auth/faq-and-troubleshooting) · [Démarrage avec Firestore](https://firebase.google.com/docs/firestore/quickstart)
 
+### Connexion Google sur Vercel et Safari
+
+Le bouton Google ouvre une fenêtre depuis le clic, y compris sur iPhone. Pour que Safari puisse accéder aux pages d’authentification sur le même domaine que l’application, configure le proxy Firebase en production. [Bonnes pratiques Firebase, option 3](https://firebase.google.com/docs/auth/web/redirect-best-practices) · [Rewrites Vercel](https://vercel.com/docs/routing/rewrites)
+
+1. Dans **Firebase Authentication → Paramètres → Domaines autorisés**, vérifie que `freelancedesk-xi.vercel.app` est autorisé.
+2. Dans Google Cloud, ouvre le client OAuth Web utilisé par le fournisseur Google de Firebase. Ajoute `https://freelancedesk-xi.vercel.app/__/auth/handler` aux URI de redirection autorisés et conserve l’URI Firebase existante.
+3. Dans **Vercel → Settings → Environment Variables**, définis `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=freelancedesk-xi.vercel.app` pour l’environnement **Production**, puis déploie cette version. Le fichier `next.config.ts` relaie `/__/auth/*` vers le domaine Firebase Hosting du projet. En local et sur les autres environnements, utilise le domaine d’authentification correspondant à l’origine de test.
+4. Sur iPhone, ouvre l’adresse Vercel dans Safari et teste le bouton Google, puis recharge le tableau de bord pour vérifier la restauration de la session.
+
 ### Déploiement des règles et des index
 
 Depuis la racine du dépôt, avec la CLI Firebase connectée et un compte autorisé, utilise l’identifiant du projet concerné. Remplace `TON_ID_PROJET` par sa valeur réelle.

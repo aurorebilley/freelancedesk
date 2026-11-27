@@ -56,22 +56,20 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     setReset(value);
   }
 
-  async function run(operation: "email" | "google", action: () => Promise<void>, fallback: string) {
-    if (submitting.current) return;
+  function start(operation: "email" | "google") {
+    if (submitting.current) return false;
     submitting.current = true;
     setPending(operation);
     setNotice(null);
-    try {
-      await action();
-    } catch (error) {
-      setNotice({ kind: "error", message: authErrorMessage(error, fallback) });
-    } finally {
-      submitting.current = false;
-      setPending(null);
-    }
+    return true;
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function finish() {
+    submitting.current = false;
+    setPending(null);
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting.current) return;
 
@@ -85,7 +83,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       return;
     }
 
-    void run("email", async () => {
+    if (!start("email")) return;
+    try {
       const auth = getFirebaseAuth();
       switch (currentMode) {
         case "login":
@@ -103,13 +102,23 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           setNotice({ kind: "success", message: resetMessage });
           break;
       }
-    }, error);
+    } catch (cause) {
+      setNotice({ kind: "error", message: authErrorMessage(cause, error) });
+    } finally {
+      finish();
+    }
   }
 
-  function handleGoogle() {
-    void run("google", async () => {
+  async function handleGoogle() {
+    if (!start("google")) return;
+    try {
+      // Call Firebase in the click handler, before any asynchronous work of our own.
       await signInWithPopup(getFirebaseAuth(), new GoogleAuthProvider());
-    }, "Impossible de te connecter avec Google pour le moment.");
+    } catch (error) {
+      setNotice({ kind: "error", message: authErrorMessage(error, "Impossible de te connecter avec Google pour le moment.") });
+    } finally {
+      finish();
+    }
   }
 
   return (
