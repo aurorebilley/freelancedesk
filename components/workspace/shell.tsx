@@ -46,11 +46,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-dvh lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
+    <div className="flex-1 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
       <a href="#workspace" className="sr-only focus:not-sr-only focus:absolute focus:z-10 focus:bg-white focus:p-3">
         Aller au contenu
       </a>
-      <aside className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 lg:sticky lg:top-0 lg:h-dvh lg:gap-8 lg:border-r lg:border-b-0 lg:p-5">
+      <aside className="flex flex-col gap-3 border-b border-slate-200 bg-white p-4 lg:sticky lg:top-0 lg:max-h-dvh lg:gap-8 lg:border-r lg:border-b-0 lg:p-5">
         <div className="flex items-center justify-between gap-2">
           <Link href="/dashboard" className="shrink-0 rounded-lg"><Brand /></Link>
           <button type="button" onClick={handleSignOut} disabled={pending}

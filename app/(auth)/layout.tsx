@@ -13,8 +13,8 @@ const sections = [
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <SessionGate access="guest">
-      <main className="mx-auto grid min-h-dvh max-w-[1600px] lg:grid-cols-[minmax(0,1fr)_minmax(0,0.94fr)]">
-        <section className="flex min-h-dvh flex-col px-6 py-7 sm:px-12 lg:px-16 lg:py-10">
+      <main className="mx-auto grid w-full max-w-[1600px] flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.94fr)]">
+        <section className="flex flex-col px-6 py-7 sm:px-12 lg:px-16 lg:py-10">
           <header className="w-fit"><Brand /></header>
           <div className="mx-auto flex w-full max-w-[420px] flex-1 flex-col justify-center py-12">
             {children}
