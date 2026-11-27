@@ -16,7 +16,7 @@ function searchable(value = "") {
 }
 
 export function ResourceList({ collection }: { collection: Collection }) {
-  const { clients, projects, invoices, today } = useWorkspace();
+  const { user, clients, projects, invoices, today, sharedLoading } = useWorkspace();
   const [interaction, setInteraction] = useInteraction();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -130,8 +130,20 @@ export function ResourceList({ collection }: { collection: Collection }) {
           )}
         </div>
       )}
-      <ResourceTable collection={collection} records={records}
-        empty={count ? "Aucun résultat pour cette recherche." : emptyMessages[collection]} onAction={setInteraction} />
+      {collection === "clients" ? <div className="space-y-4 sm:space-y-7">
+        <section aria-labelledby="personal-clients">
+          <h2 className="mb-1 text-base font-bold sm:mb-3 sm:text-xl" id="personal-clients">Mes clients</h2>
+          <ResourceTable collection="clients" records={records.filter(record => record.userId === user.uid)}
+            empty={query ? "Aucun résultat pour cette recherche." : emptyMessages.clients} onAction={setInteraction} />
+        </section>
+        <section aria-labelledby="shared-clients">
+          <h2 className="mb-1 text-base font-bold sm:mb-3 sm:text-xl" id="shared-clients">Clients partagés avec moi</h2>
+          <ResourceTable collection="clients" records={records.filter(record => record.userId !== user.uid)}
+            empty={sharedLoading ? "Chargement des clients partagés…" : query ?
+              "Aucun client partagé ne correspond à cette recherche." : "Aucun client partagé avec toi."} onAction={setInteraction} />
+        </section>
+      </div> : <ResourceTable collection={collection} records={records}
+        empty={count ? "Aucun résultat pour cette recherche." : emptyMessages[collection]} onAction={setInteraction} />}
       {interaction && <ResourceDialog interaction={interaction} onClose={() => setInteraction(null)} />}
     </main>
   );

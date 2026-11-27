@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 
 import { deleteApp, initializeApp } from "firebase/app";
+import { deleteApp as deleteAdminApp, initializeApp as initializeAdminApp } from "firebase-admin/app";
+import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 import { connectAuthEmulator, createUserWithEmailAndPassword, initializeAuth, inMemoryPersistence } from "firebase/auth";
 import {
-  collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer,
+  collection, collectionGroup, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer,
   getFirestore, query, setDoc, terminate, updateDoc, where,
 } from "firebase/firestore";
 
@@ -25,6 +27,7 @@ const apiKey = "fake-api-key";
 let processHandle;
 let testerA;
 let testerB;
+let testerC;
 let anonymous;
 
 async function createSession() {
@@ -121,7 +124,7 @@ before(async () => {
       continue;
     }
     await expectStatus(response, 401);
-    [testerA, testerB, anonymous] = await Promise.all([createAccount(), createAccount(), createSession()]);
+    [testerA, testerB, testerC, anonymous] = await Promise.all([createAccount(), createAccount(), createAccount(), createSession()]);
     return;
   }
   assert.fail("Le serveur de test n’a pas démarré.");
@@ -420,4 +423,246 @@ test("API : si création enfant et suppression du parent se croisent, aucune don
     }
   }
   await expectStatus(await api("DELETE", path("clients", client), user), 204);
+});
+
+test("Partage de clients avec trois comptes", async t => {
+  const owner = testerA;
+  const reader = testerB;
+  const editor = testerC;
+  const read = await chain(owner.user);
+  const edit = await chain(owner.user);
+  const privateClient = await chain(owner.user);
+  const editorPersonal = await chain(editor.user);
+  const sharedProjectTitle = "Projet collaboratif réservé au test";
+  const otherProject = await create("projects", owner.user, { ...sampleProject(edit.client), title: sharedProjectTitle });
+  for (const scope of [read, edit, privateClient]) {
+    scope.invoice = await create("invoices", owner.user, sampleInvoice(scope.project));
+  }
+  const ownerNumber = (await getDocFromServer(doc(owner.db, "invoices", privateClient.invoice))).data().number;
+  const members = client => "client_shares/" + client + "/client_share_members";
+  const endpoint = client => "clients/" + client + "/shares";
+  const grant = (client, recipient, permission, actor = owner.user) =>
+    api("POST", endpoint(client), actor, { email: recipient.email, permission });
+  const memberEndpoint = (client, recipient) => endpoint(client) + "/" + recipient.uid;
+  const granted = session => query(collectionGroup(session.db, "client_share_members"), where("sharedUserId", "==", session.user.uid));
+
+  async function expectReads(scope, session, allowed) {
+    for (const [name, id] of [["clients", scope.client], ["projects", scope.project], ["invoices", scope.invoice]]) {
+      const result = getDocFromServer(doc(session.db, name, id));
+      if (allowed) assert.equal((await result).data().userId, owner.user.uid);
+      else await expectPermissionDenied(result);
+    }
+  }
+
+  async function expectScopedQueries(scope, session, allowed) {
+    for (const [name, field, parent, id] of [
+      ["projects", "client_id", scope.client, scope.project],
+      ["invoices", "project_id", scope.project, scope.invoice],
+    ]) {
+      const reference = collection(session.db, name);
+      const results = getDocsFromServer(query(reference, where("userId", "==", owner.user.uid), where(field, "==", parent)));
+      if (allowed) assert.ok((await results).docs.some(record => record.id === id));
+      else await expectPermissionDenied(results);
+      await expectPermissionDenied(getDocsFromServer(query(reference, where("userId", "==", owner.user.uid))));
+    }
+  }
+
+  await t.test("BON-01 — création, validation, recherche privée et partage concurrent", async () => {
+    await expectStatus(await grant(read.client, reader.user, "read", null), 401);
+    await expectStatus(await grant(read.client, reader.user, "admin"), 400);
+    await expectStatus(await api("POST", endpoint(read.client), owner.user, { email: "invalide", permission: "read" }), 400);
+    await expectStatus(await grant(read.client, { email: "absent@example.test" }, "read"), 404);
+    await expectStatus(await grant(read.client, owner.user, "edit"), 400);
+    await expectStatus(await grant(randomUUID(), reader.user, "read"), 404);
+    await expectStatus(await grant(read.client, editor.user, "read", reader.user), 404);
+    const requests = await Promise.all([
+      grant(read.client, { email: " " + reader.user.email.toUpperCase() + " " }, "read"),
+      grant(read.client, reader.user, "read"),
+    ]);
+    assert.deepEqual(requests.map(response => response.status).sort(), [201, 409],
+      await Promise.all(requests.map(response => response.clone().text())).then(values => values.join(" / ")));
+    await expectStatus(await grant(edit.client, editor.user, "edit"), 201);
+    const list = await getDocsFromServer(collection(owner.db, members(read.client)));
+    assert.equal(list.size, 1);
+    assert.equal(list.docs[0].data().permission, "read");
+    assert.equal(list.docs[0].data().sharedUserEmail, reader.user.email);
+    assert.ok(list.docs[0].data().createdAt.toMillis() > 0);
+  });
+
+  await t.test("BON-02 — lectures ciblées, isolation des trois clients et confidentialité des partages", async () => {
+    await expectReads(read, reader, true);
+    await expectReads(edit, editor, true);
+    await expectReads(edit, reader, false);
+    await expectReads(read, editor, false);
+    await expectReads(privateClient, reader, false);
+    await expectReads(privateClient, editor, false);
+    await expectReads(read, anonymous, false);
+    await expectScopedQueries(read, reader, true);
+    await expectScopedQueries(edit, editor, true);
+    await expectScopedQueries(privateClient, editor, false);
+    await expectScopedQueries(edit, reader, false);
+    await expectPermissionDenied(getDocsFromServer(query(collection(reader.db, "clients"), where("userId", "==", owner.user.uid))));
+    await expectPermissionDenied(getDocsFromServer(collectionGroup(reader.db, "client_share_members")));
+    await expectPermissionDenied(getDocsFromServer(collection(reader.db, members(edit.client))));
+    assert.deepEqual((await getDocsFromServer(granted(reader))).docs.map(item => item.data().clientId), [read.client]);
+    assert.deepEqual((await getDocsFromServer(granted(editor))).docs.map(item => item.data().clientId), [edit.client]);
+  });
+
+  await t.test("BON-03 — interdictions API, champs protégés et absence d’écriture directe", async () => {
+    await expectStatus(await api("POST", "invoices", reader.user, sampleInvoice(read.project)), 404);
+    await expectStatus(await api("PUT", "invoices/" + read.invoice, reader.user, sampleInvoice(read.project)), 404);
+    await expectStatus(await api("PATCH", "invoices/" + read.invoice, reader.user, { status: "paid" }), 404);
+    for (const [session, scope] of [[reader, read], [editor, edit]]) {
+      for (const [name, id] of [["clients", scope.client], ["projects", scope.project], ["invoices", scope.invoice]]) {
+        await expectStatus(await api("DELETE", name + "/" + id, session.user), 404);
+        await expectPermissionDenied(deleteDoc(doc(session.db, name, id)));
+        await expectPermissionDenied(updateDoc(doc(session.db, name, id), { userId: session.user.uid }));
+      }
+      await expectStatus(await api("PUT", "clients/" + scope.client, session.user, { name: "Inaccessible" }), 404);
+      await expectStatus(await api("PUT", "projects/" + scope.project, session.user, sampleProject(scope.client)), 404);
+      await expectStatus(await api("POST", "projects", session.user, sampleProject(scope.client)), 404);
+      await expectStatus(await api("PATCH", "projects/" + scope.project, session.user, { status: "done" }), 404);
+      await expectStatus(await grant(scope.client, owner.user, "edit", session.user), 404);
+      await expectStatus(await api("PATCH", memberEndpoint(scope.client, session.user), session.user, { permission: "edit" }), 404);
+      await expectStatus(await api("DELETE", memberEndpoint(scope.client, session.user), session.user), 404);
+      const share = doc(session.db, members(scope.client), session.user.uid);
+      for (const field of ["ownerId", "sharedUserId", "permission"]) {
+        await expectPermissionDenied(updateDoc(share, { [field]: "autre" }));
+        await expectStatus(await api("PATCH", memberEndpoint(scope.client, session.user), owner.user,
+          { permission: "read", [field]: "autre" }), 400);
+      }
+      await expectPermissionDenied(setDoc(doc(session.db, members(privateClient.client), session.user.uid), {
+        ownerId: owner.user.uid, sharedUserId: session.user.uid, clientId: privateClient.client, permission: "edit",
+      }));
+      await expectPermissionDenied(setDoc(doc(session.db, "invoices", randomUUID()), {
+        ...sampleInvoice(scope.project), userId: owner.user.uid,
+      }));
+    }
+    await expectStatus(await api("PUT", "invoices/" + edit.invoice, editor.user,
+      { ...sampleInvoice(edit.project), userId: editor.user.uid }), 400);
+    for (const destination of [read.project, privateClient.project, editorPersonal.project]) {
+      await expectStatus(await api("PUT", "invoices/" + edit.invoice, editor.user, sampleInvoice(destination)), 404);
+    }
+    await expectStatus(await api("POST", "invoices", editor.user, sampleInvoice(privateClient.project)), 404);
+    await expectStatus(await api("PATCH", "invoices/" + privateClient.invoice, editor.user, { status: "paid" }), 404);
+    for (const session of [reader, editor]) {
+      await expectStatus(await api("POST", "invoice-import", session.user, {
+        project_title: sharedProjectTitle, number: randomUUID(), amount: "350",
+        issued_on: "2026-05-12", due_on: "2026-05-30", status: "Envoyée",
+      }), 404);
+    }
+  });
+
+  await t.test("BON-04 — édition, paiement et unicité parmi les factures du propriétaire", async () => {
+    await expectStatus(await api("POST", "invoices", editor.user, sampleInvoice(edit.project, ownerNumber)), 409);
+    await create("invoices", editor.user, sampleInvoice(editorPersonal.project, ownerNumber));
+    const invoice = await create("invoices", editor.user, sampleInvoice(edit.project));
+    await expectStatus(await api("PUT", "invoices/" + invoice, editor.user, sampleInvoice(edit.project, ownerNumber)), 409);
+    const fields = sampleInvoice(otherProject);
+    await expectStatus(await api("PUT", "invoices/" + invoice, editor.user, fields), 200);
+    await expectStatus(await api("PATCH", "invoices/" + invoice, editor.user, { status: "paid" }), 204);
+    const saved = (await getDocFromServer(doc(owner.db, "invoices", invoice))).data();
+    assert.equal(saved.userId, owner.user.uid);
+    assert.equal(saved.project_id, otherProject);
+    assert.equal(saved.number, fields.number);
+    assert.equal(saved.paid_on, todayInParis());
+    const own = await getDocsFromServer(query(collection(editor.db, "invoices"), where("userId", "==", editor.user.uid)));
+    assert.ok(!own.docs.some(item => item.id === invoice));
+    const number = randomUUID();
+    const results = await Promise.all([
+      api("POST", "invoices", owner.user, sampleInvoice(privateClient.project, number)),
+      api("POST", "invoices", editor.user, sampleInvoice(edit.project, number)),
+    ]);
+    assert.deepEqual(results.map(response => response.status).sort(), [201, 409]);
+  });
+
+  await t.test("BON-05 — changement de droit concurrent et révocation immédiatement appliquée", async () => {
+    const number = randomUUID();
+    const [downgrade, create] = await Promise.all([
+      api("PATCH", memberEndpoint(edit.client, editor.user), owner.user, { permission: "read" }),
+      api("POST", "invoices", editor.user, sampleInvoice(edit.project, number)),
+    ]);
+    await expectStatus(downgrade, 204);
+    assert.ok([201, 404].includes(create.status), await create.text());
+    assert.equal((await getDocsFromServer(granted(editor))).docs[0].data().permission, "read");
+    await expectStatus(await api("PATCH", "invoices/" + edit.invoice, editor.user, { status: "paid" }), 404);
+    await expectReads(edit, editor, true);
+    await expectStatus(await api("PATCH", memberEndpoint(edit.client, editor.user), owner.user, { permission: "edit" }), 204);
+    await expectStatus(await api("PATCH", "invoices/" + edit.invoice, editor.user, { status: "paid" }), 204);
+    await expectStatus(await api("DELETE", memberEndpoint(edit.client, editor.user), owner.user), 204);
+    await expectStatus(await api("DELETE", memberEndpoint(edit.client, editor.user), owner.user), 404);
+    assert.ok((await getDocsFromServer(granted(editor))).empty);
+    await expectReads(edit, editor, false);
+    await expectScopedQueries(edit, editor, false);
+    await expectStatus(await api("PATCH", "invoices/" + edit.invoice, editor.user, { status: "sent" }), 404);
+    await expectReads(edit, owner, true);
+    await expectReads(read, reader, true);
+  });
+
+  await t.test("BON-06 — suppression d’un client vide et de ses accès", async () => {
+    const client = await create("clients", owner.user, { name: "Client partagé sans projet" });
+    await expectStatus(await grant(client, reader.user, "read"), 201);
+    await expectStatus(await grant(client, editor.user, "edit"), 201);
+    await expectStatus(await api("DELETE", "clients/" + client, owner.user), 204);
+    assert.ok((await getDocsFromServer(granted(reader))).docs.every(item => item.data().clientId !== client));
+    assert.ok((await getDocsFromServer(granted(editor))).empty);
+    await expectPermissionDenied(getDocFromServer(doc(editor.db, "clients", client)));
+  });
+});
+
+test("BON-11 — quota par propriétaire et concurrence entre partage et suppression", async () => {
+  const owner = await createAccount();
+  const client = await create("clients", owner.user, { name: "Quota A" });
+  const other = await create("clients", owner.user, { name: "Quota B" });
+  const missing = { email: randomUUID() + "@example.test", permission: "read" };
+  for (let index = 0; index < 20; index++) {
+    await expectStatus(await api("POST", "clients/" + client + "/shares", owner.user, missing), 404);
+  }
+  await expectStatus(await api("POST", "clients/" + other + "/shares", owner.user, missing), 429);
+
+  const freshOwner = await createAccount();
+  const empty = await create("clients", freshOwner.user, { name: "Partage concurrent" });
+  const [grant, deletion] = await Promise.all([
+    api("POST", "clients/" + empty + "/shares", freshOwner.user, { email: testerC.user.email, permission: "edit" }),
+    api("DELETE", "clients/" + empty, freshOwner.user),
+  ]);
+  await expectStatus(deletion, 204);
+  assert.ok([201, 404].includes(grant.status), await grant.text());
+  const shares = await getDocsFromServer(query(collectionGroup(testerC.db, "client_share_members"),
+    where("sharedUserId", "==", testerC.user.uid)));
+  assert.ok(shares.docs.every(share => share.data().clientId !== empty));
+});
+
+test("BON-12 — autorisations stockées incohérentes et anciens numéros sans réservation", async () => {
+  const admin = initializeAdminApp({ projectId }, randomUUID());
+  const adminDb = getAdminFirestore(admin);
+  try {
+    const owner = await createAccount();
+    const scope = await chain(owner.user);
+    const number = randomUUID();
+    const invoice = await create("invoices", owner.user, sampleInvoice(scope.project, number));
+    const reservation = await adminDb.collection("invoiceNumberReservations")
+      .where("invoiceId", "==", invoice).get();
+    assert.equal(reservation.size, 1);
+    await reservation.docs[0].ref.delete();
+
+    const member = adminDb.doc("client_shares/" + scope.client + "/client_share_members/" + testerC.user.uid);
+    const valid = { clientId: scope.client, ownerId: owner.user.uid, sharedUserId: testerC.user.uid, permission: "edit" };
+    for (const invalid of [
+      { permission: "unknown" }, { ownerId: testerB.user.uid }, { clientId: randomUUID() },
+      { sharedUserId: testerB.user.uid },
+    ]) {
+      await member.set({ ...valid, ...invalid });
+      await expectPermissionDenied(getDocFromServer(doc(testerC.db, "clients", scope.client)));
+      await expectPermissionDenied(getDocFromServer(doc(testerC.db, "invoices", invoice)));
+      await expectStatus(await api("POST", "invoices", testerC.user, sampleInvoice(scope.project)), 404);
+    }
+    await member.set(valid);
+    await expectStatus(await api("POST", "invoices", testerC.user, sampleInvoice(scope.project, number)), 409);
+    await expectStatus(await api("PUT", "invoices/" + invoice, testerC.user, sampleInvoice(scope.project, number)), 200);
+    assert.equal((await adminDb.collection("invoiceNumberReservations").where("invoiceId", "==", invoice).get()).size, 1);
+  } finally {
+    await adminDb.terminate();
+    await deleteAdminApp(admin);
+  }
 });

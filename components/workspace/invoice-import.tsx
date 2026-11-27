@@ -7,7 +7,8 @@ import { analyzeInvoiceCsv, type ImportRow } from "@/lib/domain/invoice-csv";
 import { invoiceCsvAllowedColumns } from "@/lib/domain/invoice-import";
 import { importInvoice } from "@/lib/firebase/data";
 import { useWorkspace } from "./context";
-import { Badge, Modal } from "./resources";
+import { Modal } from "./modal";
+import { Badge } from "./resources";
 
 const template = "data:text/csv;charset=utf-8," + encodeURIComponent(invoiceCsvAllowedColumns.join(",") + "\r\n");
 const rowBadges = {
@@ -81,7 +82,7 @@ function Preview({ rows }: { rows: ImportRow[] }) {
 }
 
 function ImportDialog({ onClose }: { onClose: () => void }) {
-  const { user, projects, invoices } = useWorkspace();
+  const { user, personal: { projects, invoices } } = useWorkspace();
   const busy = useRef(false);
   const [pending, setPending] = useState(false);
   const [file, setFile] = useState<File>();

@@ -2,29 +2,65 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Les lectures individuelles et les requêtes doivent respecter le propriétaire.
-    // Pour une liste, ajouter where('userId', '==', uid) à la requête.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Les requêtes personnelles filtrent par userId.
     function ownsDocument() {
-      return request.auth != null && resource.data.userId == request.auth.uid;
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function hasClientShare(clientId, ownerId) {
+      let client = get(/databases/$(database)/documents/clients/$(clientId));
+      let share = get(/databases/$(database)/documents/client_shares/$(clientId)/client_share_members/$(request.auth.uid));
+      return client.data.userId == ownerId
+        && share.data.clientId == clientId
+        && share.data.ownerId == ownerId
+        && share.data.sharedUserId == request.auth.uid
+        && share.data.permission in ['read', 'edit'];
+    }
+
+    function hasProjectShare(projectId, ownerId) {
+      let project = get(/databases/$(database)/documents/projects/$(projectId));
+      return project.data.userId == ownerId && hasClientShare(project.data.client_id, ownerId);
     }
 
     match /clients/{id} {
-      allow get, list: if ownsDocument();
-      // Les routes serveur appliquent les validations et transactions métier.
+      allow get: if ownsDocument() || (signedIn() && hasClientShare(id, resource.data.userId));
+      allow list: if ownsDocument();
       allow write: if false;
     }
 
     match /projects/{id} {
-      allow get, list: if ownsDocument();
+      // La requête collaborative contraint userId et client_id.
+      allow get, list: if ownsDocument() ||
+        (signedIn() && hasClientShare(resource.data.client_id, resource.data.userId));
       allow write: if false;
     }
 
     match /invoices/{id} {
-      allow get, list: if ownsDocument();
+      // La requête collaborative contraint userId et project_id.
+      allow get, list: if ownsDocument() ||
+        (signedIn() && hasProjectShare(resource.data.project_id, resource.data.userId));
       allow write: if false;
     }
 
-    // Les réservations de numéros sont réservées au serveur.
+    match /client_shares/{clientId}/client_share_members/{recipientId} {
+      allow get, list: if signedIn() &&
+        get(/databases/$(database)/documents/clients/$(clientId)).data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /{path=**}/client_share_members/{recipientId} {
+      // La requête de groupe de l’associé contraint sharedUserId.
+      allow get, list: if signedIn() && resource.data.sharedUserId == request.auth.uid;
+    }
+
+    match /client_share_rate_limits/{id} {
+      allow read, write: if false;
+    }
+
     match /invoiceNumberReservations/{id} {
       allow read, write: if false;
     }

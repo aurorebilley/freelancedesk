@@ -1,0 +1,90 @@
+@startuml
+hide circle
+skinparam linetype ortho
+
+entity FirebaseAuthUser {
+  *uid : string <<PK>>
+  --
+  email : string
+}
+entity Client {
+  *id : string <<PK>>
+  --
+  *userId : string <<FK>>
+  *name : string
+  email : string
+  city : string
+  *projectCount : integer
+  sharingUpdatedAt : timestamp
+}
+entity Project {
+  *id : string <<PK>>
+  --
+  *userId : string <<FK>>
+  *client_id : string <<FK>>
+  *title : string
+  *status : string
+  *daily_rate : number
+  *start_date : string
+  *invoiceCount : integer
+}
+entity Invoice {
+  *id : string <<PK>>
+  --
+  *userId : string <<FK>>
+  *project_id : string <<FK>>
+  *number : string
+  *amount : number
+  *issued_on : string
+  *due_on : string
+  *status : string
+  paid_on : string
+}
+entity ClientShare {
+  *clientId : string <<PK, FK>>
+  *sharedUserId : string <<PK, FK>>
+  --
+  *ownerId : string <<FK>>
+  *ownerEmail : string
+  *sharedUserEmail : string
+  *permission : SharePermission
+  *createdAt : timestamp
+  *updatedAt : timestamp
+}
+enum SharePermission {
+  read
+  edit
+}
+entity InvoiceNumberReservation {
+  *id : string <<PK>>
+  --
+  *userId : string <<FK>>
+  *invoiceId : string <<FK>>
+}
+entity ClientShareRateLimit {
+  *id : string <<PK, FK>>
+  --
+  *startedAt : integer
+  *attempts : integer
+}
+
+FirebaseAuthUser ||--o{ Client : owns
+FirebaseAuthUser ||--o{ Project : owns
+FirebaseAuthUser ||--o{ Invoice : owns
+FirebaseAuthUser ||--o{ ClientShare : grants
+FirebaseAuthUser ||--o{ ClientShare : receives
+FirebaseAuthUser ||--o| ClientShareRateLimit : has
+Client ||--o{ Project : contains
+Project ||--o{ Invoice : contains
+Client ||--o{ ClientShare : has
+Invoice ||--o| InvoiceNumberReservation : reserves
+ClientShare ..> SharePermission
+
+note right of ClientShare
+  client_shares/{clientId}/client_share_members/{sharedUserId}
+end note
+note right of ClientShareRateLimit
+  client_share_rate_limits/{ownerId}
+  startedAt is expressed in epoch milliseconds.
+end note
+@enduml

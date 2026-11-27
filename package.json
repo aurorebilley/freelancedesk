@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "node --test tests/dates.test.mjs tests/finance.test.mjs",
+    "test": "node --test tests/dates.test.mjs tests/finance.test.mjs tests/client-sharing.test.mjs",
     "test:emulator": "node --test tests/firestore.test.mjs",
     "verify:finances": "node scripts/verify-financial-dashboard.ts"
   },
