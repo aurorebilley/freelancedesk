@@ -1,0 +1,9 @@
+project_title,number,amount,issued_on,due_on,status
+Site vitrine de démonstration,TP3-20261127-PIEGE-01,620.00,2026-10-18,2026-11-18,sent
+Identité visuelle de démonstration,TP3-20261127-PIEGE-02,380.00,2026-11-20,2026-12-20,draft
+Site vitrine de démonstration,TP3-20261127-PIEGE-03,940.50,2026-11-05,2026-12-05,paid
+Identité visuelle de démonstration,TP3-20261127-PIEGE-04,485.00,2026-10-17,2026-11-17,Payée
+Site vitrine de démonstration,TP3-20261127-PIEGE-05,-150.00,2026-11-03,2026-12-03,sent
+"Projet introuvable, ""TP3""",TP3-20261127-PIEGE-06,610.00,2026-11-08,2026-12-08,sent
+Identité visuelle de démonstration,TP3-20261127-PIEGE-07,795.00,2026-11-21,2026-11-20,cancelled
+Site vitrine de démonstration,TP3-20261127-PIEGE-01,110.00,2026-11-24,2026-12-24,sent

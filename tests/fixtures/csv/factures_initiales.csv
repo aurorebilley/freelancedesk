@@ -1,0 +1,11 @@
+invoice_number,customer_name,issue_date,due_date,total,currency,status
+INV-2026-001,Atelier des Tilleuls,2026-09-01,2026-10-01,1250.00,EUR,paid
+INV-2026-002,Maison Abricot,2026-09-10,2026-10-10,840.00,EUR,paid
+INV-2026-003,Studio Horizon,2026-09-18,2026-10-18,2360.50,EUR,paid
+INV-2026-004,Librairie du Parc,2026-10-03,2026-11-02,590.00,EUR,overdue
+INV-2026-005,"Café, Papier & Plume",2026-10-09,2026-11-08,1075.00,EUR,paid
+INV-2026-006,Atelier des Tilleuls,2026-10-20,2026-11-19,1520.00,EUR,paid
+INV-2026-007,Éditions Rivage,2026-11-04,2026-12-04,2450.00,EUR,sent
+INV-2026-008,Maison Abricot,2026-11-09,2026-12-09,375.90,EUR,cancelled
+INV-2026-009,Studio Horizon,2026-11-17,2026-12-17,1870.00,EUR,sent
+INV-2026-010,Éditions Rivage,2026-11-25,2026-12-25,960.00,EUR,draft

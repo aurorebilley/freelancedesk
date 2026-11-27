@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Les lectures individuelles et les requêtes doivent respecter le propriétaire.
+    // Pour une liste, ajouter where('userId', '==', uid) à la requête.
+    function ownsDocument() {
+      return request.auth != null && resource.data.userId == request.auth.uid;
+    }
+
+    match /clients/{id} {
+      allow get, list: if ownsDocument();
+      // Les routes serveur appliquent les validations et transactions métier.
+      allow write: if false;
+    }
+
+    match /projects/{id} {
+      allow get, list: if ownsDocument();
+      allow write: if false;
+    }
+
+    match /invoices/{id} {
+      allow get, list: if ownsDocument();
+      allow write: if false;
+    }
+
+    // Les réservations de numéros sont réservées au serveur.
+    match /invoiceNumberReservations/{id} {
+      allow read, write: if false;
+    }
+  }
+}
