@@ -2,7 +2,8 @@ import { invoiceStatuses, type InvoiceStatus } from "./model";
 import { BusinessError, validate } from "./validation";
 
 export const invoiceCsvColumns = ["project_title", "number", "amount", "issued_on", "due_on", "status"] as const;
-export type InvoiceCsvFields = Record<(typeof invoiceCsvColumns)[number], string>;
+export const invoiceCsvAllowedColumns = [...invoiceCsvColumns, "paid_on"] as const;
+export type InvoiceCsvFields = Record<(typeof invoiceCsvColumns)[number], string> & { paid_on?: string };
 
 const frenchStatuses: ReadonlyMap<string, InvoiceStatus> = new Map([
   ["brouillon", "draft"], ["envoyee", "sent"], ["envoye", "sent"],
@@ -15,8 +16,9 @@ export function readInvoiceCsvFields(input: unknown): InvoiceCsvFields {
   }
 
   const data = input as Record<string, unknown>;
-  if (Object.keys(data).length !== invoiceCsvColumns.length ||
-      !invoiceCsvColumns.every(key => Object.hasOwn(data, key) && typeof data[key] === "string")) {
+  if (Object.keys(data).some(key => !invoiceCsvAllowedColumns.some(column => column === key)) ||
+      !invoiceCsvColumns.every(key => Object.hasOwn(data, key) && typeof data[key] === "string") ||
+      (Object.hasOwn(data, "paid_on") && typeof data.paid_on !== "string")) {
     throw new BusinessError("La ligne de facture contient des champs manquants ou non autorisés.");
   }
   return data as InvoiceCsvFields;
@@ -53,6 +55,7 @@ export function validateImportedInvoice(fields: InvoiceCsvFields, project_id: st
     issued_on: fields.issued_on.trim(),
     due_on: fields.due_on.trim(),
     status,
+    paid_on: fields.paid_on?.trim(),
   });
   return { invoice, converted: rawStatus !== invoice.status };
 }

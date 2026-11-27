@@ -1,6 +1,6 @@
 import Papa from "papaparse";
 
-import { invoiceCsvColumns, invoiceProjectId, invoiceProjectTitle, validateImportedInvoice, type InvoiceCsvFields } from "./invoice-import";
+import { invoiceCsvAllowedColumns, invoiceCsvColumns, invoiceProjectId, invoiceProjectTitle, validateImportedInvoice, type InvoiceCsvFields } from "./invoice-import";
 import type { Invoice, InvoiceInput, Project } from "./model";
 
 interface CsvRow {
@@ -42,7 +42,8 @@ function parseCsv(input: string): CsvRow[] {
         columns = data.map(column => column.trim());
         const missing = invoiceCsvColumns.find(name => !columns?.includes(name));
         if (missing) throw new Error(`Une colonne obligatoire est manquante (${missing}).`);
-        if (columns.length !== invoiceCsvColumns.length) {
+        if (new Set(columns).size !== columns.length ||
+            columns.some(name => !invoiceCsvAllowedColumns.some(column => column === name))) {
           throw new Error("Le fichier CSV contient une colonne supplémentaire ou en double.");
         }
         return;

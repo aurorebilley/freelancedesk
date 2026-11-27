@@ -36,6 +36,7 @@ export interface InvoiceInput {
   issued_on: string;
   due_on: string;
   status: InvoiceStatus;
+  paid_on?: string;
 }
 
 export interface InputByCollection {

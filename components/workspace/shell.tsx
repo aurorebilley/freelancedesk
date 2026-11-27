@@ -1,7 +1,7 @@
 "use client";
 
 import { signOut } from "firebase/auth";
-import { FolderKanban, LayoutDashboard, LogOut, ReceiptText, UsersRound } from "lucide-react";
+import { ChartNoAxesCombined, FolderKanban, LayoutDashboard, LogOut, ReceiptText, UsersRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRef, useState, type ReactNode } from "react";
@@ -17,6 +17,7 @@ const navigation = [
   { href: "/clients", title: "Clients", icon: UsersRound },
   { href: "/projects", title: "Projets", icon: FolderKanban },
   { href: "/invoices", title: "Factures", icon: ReceiptText },
+  { href: "/finances", title: "Finances", icon: ChartNoAxesCombined },
 ];
 
 export function WorkspaceShell({ children }: { children: ReactNode }) {
@@ -58,7 +59,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             <LogOut size={17} aria-hidden="true" />
           </button>
         </div>
-        <nav className="grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-1" aria-label="Navigation principale">
+        <nav className="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-1" aria-label="Navigation principale">
           {navigation.map(({ href, title, icon: Icon }) => {
             const selected = pathname === href || pathname.startsWith(href + "/");
             return (
