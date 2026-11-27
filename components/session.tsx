@@ -47,7 +47,7 @@ export function useSession() {
 
 export function SessionStatus({ error = false }: { error?: boolean }) {
   return (
-    <main className="grid min-h-dvh place-items-center px-6 text-center">
+    <main className="grid flex-1 place-items-center px-6 text-center">
       {error ? (
         <div>
           <p role="alert">Impossible de vérifier ta session. Réessaie dans un instant.</p>

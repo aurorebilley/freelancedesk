@@ -12,8 +12,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="fr">
-      <body>
+      <body className="flex min-h-dvh flex-col">
         <SessionProvider>{children}</SessionProvider>
+        <footer className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 text-center text-sm text-slate-600">
+          FreelanceDesk — v1.1
+        </footer>
       </body>
     </html>
   );
