@@ -81,7 +81,7 @@ function PaymentDateQuality({ summary }: { summary: FinancialSummary }) {
 }
 
 export function Finances() {
-  const { invoices, projects, clients, today } = useWorkspace();
+  const { personal: { invoices, projects, clients }, today } = useWorkspace();
   const [period, setPeriod] = useState<FinancialPeriod>(6);
   const summary = useMemo(() => calculateFinances(invoices, projects, clients, today, period),
     [invoices, projects, clients, today, period]);

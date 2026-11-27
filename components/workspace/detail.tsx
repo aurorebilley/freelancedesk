@@ -7,6 +7,7 @@ import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { formatDate, formatMoney, knownPaymentDate, overdueDays } from "@/lib/domain/format";
 import { invoiceStatuses, projectStatuses, type Collection } from "@/lib/domain/model";
 import { mutate } from "@/lib/firebase/data";
+import { AccessBadge, ClientAccess, ShareButton } from "./client-sharing";
 import { useWorkspace } from "./context";
 import {
   AddButton, Badge, Heading, LateBadge, MissingRecord, ResourceDialog, ResourceTable, ReturnLink, useInteraction,
@@ -67,7 +68,7 @@ function StatusControl({ collection, id, status }: { collection: "projects" | "i
 }
 
 export function ResourceDetail({ collection, id }: { collection: Collection; id: string }) {
-  const { clients, projects, invoices, today } = useWorkspace();
+  const { clients, projects, invoices, today, access, ownerEmail, sharedLoading } = useWorkspace();
   const [interaction, setInteraction] = useInteraction();
   const client = collection === "clients" ? clients.find(item => item.id === id) : undefined;
   const invoice = collection === "invoices" ? invoices.find(item => item.id === id) : undefined;
@@ -75,7 +76,11 @@ export function ResourceDetail({ collection, id }: { collection: Collection; id:
   const relatedClient = clients.find(item => item.id === project?.client_id);
   const record = client ?? invoice ?? (collection === "projects" ? project : undefined);
 
-  if (!record) return <MissingRecord collection={collection} />;
+  if (!record && sharedLoading) return <main className="panel" role="status">Chargement de la ressource…</main>;
+  const permission = record && access(record);
+  if (!record || !permission) return <MissingRecord collection={collection} />;
+  const owner = permission === "owner";
+  const editable = owner || (collection === "invoices" && permission === "edit");
   const paidOn = invoice && knownPaymentDate(invoice);
 
   const fields = client ? [
@@ -101,26 +106,30 @@ export function ResourceDetail({ collection, id }: { collection: Collection; id:
       <ReturnLink collection={collection} />
       <Heading title={"name" in record ? record.name : "number" in record ? record.number : record.title}>
         <div className="flex flex-wrap gap-2">
-          <button className="button-secondary" type="button" onClick={() => setInteraction({ edit: { collection, record } })}>
+          <AccessBadge access={permission} />
+          {client && owner && <ShareButton client={client} />}
+          {editable && <button className="button-secondary" type="button" onClick={() => setInteraction({ edit: { collection, record } })}>
             <Pencil size={16} aria-hidden="true" /> Modifier
-          </button>
-          <button className="button-secondary text-red-700!" type="button"
+          </button>}
+          {owner && <button className="button-secondary text-red-700!" type="button"
             onClick={() => setInteraction({ remove: { collection, record, redirect: "/" + collection } })}>
             <Trash2 size={16} aria-hidden="true" /> Supprimer
-          </button>
+          </button>}
         </div>
       </Heading>
+      {client && !owner && ownerEmail(client.id) && <p className="mb-4 text-sm text-slate-700">Partagé par {ownerEmail(client.id)}</p>}
       <Facts fields={fields} />
-      {collection !== "clients" && "status" in record && (
+      {client && owner && <ClientAccess key={client.id} client={client} />}
+      {editable && collection !== "clients" && "status" in record && (
         <StatusControl key={record.status} collection={collection} id={record.id} status={record.status} />
       )}
       {collection !== "invoices" && (
         <section className="mt-8" aria-labelledby="relations-title">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-xl font-bold" id="relations-title">{client ? "Projets du client" : "Factures du projet"}</h2>
-            <AddButton collection={client ? "projects" : "invoices"} onClick={() =>
+            {(owner || (!client && permission === "edit")) && <AddButton collection={client ? "projects" : "invoices"} onClick={() =>
               setInteraction({ edit: { collection: client ? "projects" : "invoices", parent: id } })
-            } />
+            } />}
           </div>
           {client ? (
             <ResourceTable collection="projects" records={projects.filter(item => item.client_id === id)}

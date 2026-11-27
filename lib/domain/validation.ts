@@ -1,4 +1,4 @@
-import { isCivilDate } from "./format";
+import { isCivilDate } from "./format.ts";
 import {
   isDocumentId,
   invoiceStatuses,
@@ -6,22 +6,25 @@ import {
   type Collection,
   type InputByCollection,
   type InvoiceInput,
-} from "./model";
+} from "./model.ts";
 
 export class BusinessError extends Error {
-  constructor(message: string, public readonly status = 400) {
+  readonly status: number;
+
+  constructor(message: string, status = 400) {
     super(message);
+    this.status = status;
   }
 }
 
-function object(input: unknown): Record<string, unknown> {
+export function object(input: unknown): Record<string, unknown> {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new BusinessError("Le formulaire est invalide.");
   }
   return input as Record<string, unknown>;
 }
 
-function checkFields(data: Record<string, unknown>, keys: string[]) {
+export function checkFields(data: Record<string, unknown>, keys: string[]) {
   if (Object.keys(data).some(key => !keys.includes(key))) {
     throw new BusinessError("Le formulaire contient un champ non autorisé.");
   }

@@ -6,6 +6,18 @@ La page **Finances** (`/finances`) analyse les données du compte connecté. Ell
 
 L’application utilise Next.js App Router, React, TypeScript, Tailwind CSS, Lucide React, Recharts, Firebase Authentication et Cloud Firestore. Git suit les sources et le fichier de verrouillage npm.
 
+## Collaboration par client
+
+Dans **Clients**, utilise **Partager** sur un client que tu possèdes et saisis l’adresse d’un compte FreelanceDesk existant. La fiche client permet de modifier ou de révoquer l’accès dans **Gestion des accès**.
+
+| Accès | Actions |
+|---|---|
+| **Propriétaire** | Gérer le client, les projets, les factures et les accès |
+| **Lecture seule** (`read`) | Consulter le client, ses projets et ses factures |
+| **Modification** (`edit`) | Consulter le client et ses projets, créer et modifier les factures du client |
+
+Les clients reçus figurent dans **Clients partagés avec moi**. Les listes de projets et factures indiquent les accès. Les deux tableaux de bord et l’import CSV utilisent les données personnelles. Les écritures collaboratives alimentent les indicateurs du propriétaire de la facture.
+
 ## Tableau de bord financier
 
 - Le filtre couvre **3, 6 ou 12 mois calendaires**, mois en cours compris, dans le fuseau `Europe/Paris`. La période par défaut est de 6 mois.
@@ -69,44 +81,30 @@ Si la commande `firebase` est absente, tu peux utiliser `npx firebase-tools@15.3
 
 ```sh
 firebase login
+firebase deploy --only firestore:indexes --project TON_ID_PROJET
 firebase deploy --only firestore:rules --project TON_ID_PROJET
 ```
 
-Ce déploiement applique `firestore.rules` à la base par défaut. Si la base sert aussi une autre application, examine les règles existantes avant de les remplacer. Aucun index composite n’est requis par les requêtes actuelles, qui filtrent sur `userId` avec l’index simple par défaut. Si de nouvelles requêtes exigent des index composites, référence `firestore.indexes.json` dans `firebase.json`, puis utilise `firebase deploy --only firestore:indexes --project TON_ID_PROJET`. [Déploiement des règles](https://firebase.google.com/docs/rules/manage-deploy) · [Gestion des index](https://firebase.google.com/docs/firestore/query-data/indexing)
+Attends l’activation de l’index de groupe avant de publier le code Vercel. Configure le même projet Firebase pour le SDK Web et l’Admin SDK. L’identité serveur doit pouvoir lire les comptes Auth par UID et par adresse. Les étapes spécifiques au projet et le retour arrière sont détaillés dans la migration. [Migration Firestore du partage](docs/migrations/003_add_client_shares.md) · [Déploiement des règles](https://firebase.google.com/docs/rules/manage-deploy) · [Gestion des index](https://firebase.google.com/docs/firestore/query-data/indexing)
 
 ## Modèle de données
 
-Les identifiants des documents sont natifs. Chaque document métier possède un `userId` égal à l’UID Firebase Authentication du propriétaire.
-
-```mermaid
-erDiagram
-    FIREBASE_AUTH ||--o{ CLIENTS : "userId"
-    FIREBASE_AUTH ||--o{ PROJECTS : "userId"
-    FIREBASE_AUTH ||--o{ INVOICES : "userId"
-    CLIENTS ||--o{ PROJECTS : "client_id"
-    PROJECTS ||--o{ INVOICES : "project_id"
-    INVOICES ||--o| INVOICE_NUMBER_RESERVATIONS : "invoiceId"
-    INVOICES {
-        string userId
-        string project_id
-        string number
-        number amount
-        string issued_on
-        string due_on
-        string status
-        string paid_on "facultatif"
-    }
-```
+Les identifiants des documents sont natifs. Les clients, projets et factures possèdent un `userId` égal à l’UID Firebase Authentication du propriétaire.
 
 | Collection | Champs métier | Champ technique |
 |---|---|---|
-| `clients` | `userId`, `name`, `email` (facultatif), `city` (facultatif) | `projectCount` |
+| `clients` | `userId`, `name`, `email` et `city` facultatifs | `projectCount`, `sharingUpdatedAt` facultatif |
 | `projects` | `userId`, `client_id`, `title`, `status`, `daily_rate`, `start_date` | `invoiceCount` |
-| `invoices` | `userId`, `project_id`, `number`, `amount`, `issued_on`, `due_on`, `status`, `paid_on` (facultatif) | Aucun |
+| `invoices` | `userId`, `project_id`, `number`, `amount`, `issued_on`, `due_on`, `status`, `paid_on` facultatif | |
+| `client_shares/{clientId}/client_share_members` | `clientId`, `ownerId`, `sharedUserId`, `permission`, coordonnées et horodatages | Identifiant natif égal à l’UID de l’associé |
+| `client_share_rate_limits` | | Compteur horaire des recherches par propriétaire |
+| `invoiceNumberReservations` | | Réservation de numéro par propriétaire |
+
+[Schéma Mermaid et emplacement des documents](docs/bonus/schema-donnees.md) · [Schéma PlantUML](docs/bonus/schema-donnees.puml)
 
 Les dates sont des chaînes de calendrier `AAAA-MM-JJ` en base et s’affichent en `JJ/MM/AAAA`. Les jours de retard se calculent à partir de la date civile en `Europe/Paris`. Une facture est en retard uniquement si son statut vaut `sent` et si son échéance est strictement antérieure à cette date.
 
-`paid_on` enregistre la date réelle de paiement. La date du jour à Paris est enregistrée par défaut lors de la saisie manuelle d’un nouveau paiement. La date peut être corrigée depuis la facture et doit être égale ou postérieure à sa date d’émission. Les règles et index Firestore existants suffisent. L’évolution est détaillée dans [la note de migration Firestore](docs/migrations/002_add_paid_on.md).
+`paid_on` enregistre la date réelle de paiement. La date du jour à Paris est enregistrée par défaut lors de la saisie manuelle d’un nouveau paiement. La date peut être corrigée depuis la facture et doit être égale ou postérieure à sa date d’émission. L’évolution est détaillée dans [la note de migration Firestore](docs/migrations/002_add_paid_on.md).
 
 Le CSV conserve les colonnes obligatoires `project_title,number,amount,issued_on,due_on,status`. La colonne facultative `paid_on` accepte une date `AAAA-MM-JJ` pour une facture payée. Les fichiers à six colonnes restent compatibles. À l’import, une facture payée dont la date est vide ou absente conserve une date inconnue.
 
@@ -115,17 +113,18 @@ Le CSV conserve les colonnes obligatoires `project_title,number,amount,issued_on
 | Projet | `prospect` Prospect, `active` En cours, `done` Terminé, `cancelled` Annulé |
 | Facture | `draft` Brouillon, `sent` Envoyée, `paid` Payée, `cancelled` Annulée |
 
-Le nom du client, le titre du projet et le numéro de facture sont obligatoires. Une adresse e-mail de client renseignée doit être valide. Tarifs et montants sont strictement positifs. L’échéance est égale ou postérieure à l’émission. Les références doivent viser un parent du même compte. La suppression d’un parent exige qu’il n’ait plus de dépendances directes. Chaque suppression est confirmée dans l’interface.
+Le nom du client, le titre du projet et le numéro de facture sont obligatoires. Une adresse e-mail de client renseignée doit être valide. Tarifs et montants sont strictement positifs. L’échéance est égale ou postérieure à l’émission. Les références doivent viser un parent du même propriétaire. La suppression d’un parent exige qu’il n’ait plus de dépendances directes. Chaque suppression est confirmée dans l’interface.
 
 ### Sécurité des lectures et des écritures
 
-- Le navigateur souscrit uniquement à des requêtes filtrées sur son UID. Les règles vérifient le propriétaire, refusent toute écriture directe et réservent la collection technique `invoiceNumberReservations` au serveur.
-- Les routes API déduisent l’UID du jeton Firebase vérifié et contrôlent la révocation. Elles valident les champs autorisés et vérifient la propriété des documents et parents avant d’écrire. Une ressource d’un autre compte et une ressource absente produisent le même message.
+- Les requêtes Firestore personnelles filtrent par UID. Chaque lecture collaborative remonte au client autorisé à partir du projet. La découverte des partages filtre par UID de l’associé et les requêtes métier ciblent un client ou projet précis avec son propriétaire. Firestore refuse toute écriture directe depuis le navigateur.
+- L’API vérifie le jeton et la révocation Firebase Auth. Les mutations autorisent les champs métier attendus et résolvent les propriétaires depuis les documents Firestore. L’API de partage contrôle la propriété avant chaque recherche Auth et limite les recherches par propriétaire. Les accès directs sont soumis aux règles Firestore et affichent le même message pour une ressource absente ou inaccessible.
 - Les écritures utilisent des transactions. Un changement de parent met à jour ses deux compteurs avec l’enfant. Une suppression et l’ajout d’un enfant lisent ou écrivent le même parent, empêchant les données orphelines lors de requêtes simultanées.
-- Une réservation unique par couple UID et numéro est créée dans la même transaction que la facture. Les espaces aux extrémités sont retirés et la casse est conservée. Une renumérotation transfère la réservation et une suppression la libère. L’identifiant de la facture reste stable.
+- La réservation utilise le véritable propriétaire du projet et du client, y compris quand un associé crée la facture. Une création ou renumérotation tient compte des numéros utilisés par les anciennes factures. La transaction transfère la réservation lors d’une renumérotation et la libère lors d’une suppression. Les espaces aux extrémités sont retirés et la casse est conservée.
+- Le changement de droit et la révocation prennent effet sur les nouvelles opérations. Les écritures collaboratives relisent le partage dans la transaction. L’interface se désabonne des données révoquées et retire leurs fiches et formulaires. Les données que l’associé avait copiées restent sous son contrôle.
 - Le SDK Admin contourne les règles Firestore. Réserve ses identifiants à l’application serveur. Si des documents métier existent déjà, vérifie leurs propriétaires, références, dates et doublons, puis initialise les compteurs et les réservations avant d’autoriser les écritures de l’application.
 
-Les listes, recherches, agrégats et tris chargent les documents du compte connecté. Cette approche correspond au volume d’un espace individuel de TP. [Règles et requêtes Firestore](https://firebase.google.com/docs/firestore/security/rules-query) · [Isolation des transactions](https://firebase.google.com/docs/firestore/transaction-data-contention)
+Les listes chargent les documents personnels et les périmètres associés en temps réel. Les clients partagés ouvrent une requête de projets par client et une requête de factures par projet. Cette approche vise le volume de données du TP. [Règles et requêtes Firestore](https://firebase.google.com/docs/firestore/security/rules-query) · [Isolation des transactions](https://firebase.google.com/docs/firestore/transaction-data-contention)
 
 ## Tests
 
@@ -137,9 +136,20 @@ npm test
 firebase emulators:exec --project demo-freelancedesk --only auth,firestore "npm run test:emulator"
 ```
 
+Le test navigateur facultatif nécessite Playwright et ses navigateurs. Installe Playwright dans un répertoire de test dédié, puis lance la recette depuis la racine du projet. Le scénario construit et lance une version optimisée pour les émulateurs.
+
+```sh
+npm install --prefix /tmp/freelancedesk-playwright playwright@1.65.1
+/tmp/freelancedesk-playwright/node_modules/.bin/playwright install chromium webkit
+NODE_PATH=/tmp/freelancedesk-playwright/node_modules \
+  firebase emulators:exec --project demo-freelancedesk --only auth,firestore "node tests/client-sharing.browser.cjs"
+```
+
 La suite Firebase requiert la CLI Firebase et un JDK 21. Elle démarre un serveur Next.js de test sur le port 3100 et utilise les émulateurs locaux sur 9099 et 8080. Le projet de démonstration ne requiert aucun identifiant Admin réel. [Configuration des émulateurs Firebase](https://firebase.google.com/docs/emulator-suite/install_and_configure)
 
 Les tests incluent les périodes, les calculs financiers de référence, la compatibilité des anciennes factures et les transitions de `paid_on`. Les scénarios Firebase couvrent aussi l’isolation entre comptes et les transactions concurrentes. Les résultats du TP 6 figurent dans [le compte rendu de validation](docs/TP6-validation.md).
+
+La recette à trois comptes et les résultats détaillés du TP bonus sont disponibles dans le dossier de livraison. [Comptes de test](docs/bonus/comptes-de-test.md) · [Tableau des tests](docs/bonus/tableau-tests.md) · [Retour d’expérience](docs/bonus/retour-experience.md)
 
 La vérification du lien de réinitialisation et la recette sur le projet Firebase cible figurent dans [la checklist de recette](docs/TESTS.md).
 

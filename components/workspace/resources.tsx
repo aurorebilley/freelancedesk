@@ -3,7 +3,7 @@
 import { ArrowLeft, Pencil, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { formatDate, formatMoney, knownPaymentDate, overdueDays } from "@/lib/domain/format";
 import {
@@ -12,7 +12,9 @@ import {
 } from "@/lib/domain/model";
 import { validate } from "@/lib/domain/validation";
 import { mutate } from "@/lib/firebase/data";
+import { AccessBadge, ShareButton } from "./client-sharing";
 import { useWorkspace } from "./context";
+import { Modal } from "./modal";
 
 type Entity = Client | Project | Invoice;
 type EditorState = { collection: Collection; record?: Entity; parent?: string };
@@ -77,29 +79,8 @@ function Field({ label, name, children }: { label: string; name: string; childre
   return <div className="min-w-0"><label className="field-label" htmlFor={name}>{label}</label>{children}</div>;
 }
 
-export function Modal({ title, locked, onClose, children, wide = false }: {
-  title: string; locked: boolean; onClose: () => void; children: ReactNode; wide?: boolean;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    dialog.showModal();
-    return () => dialog.close();
-  }, []);
-  return (
-    <dialog ref={ref} aria-labelledby="dialog-title" className={wide ? "resource-dialog max-w-6xl" : "resource-dialog"} onCancel={event => {
-      event.preventDefault();
-      if (!locked) onClose();
-    }}>
-      <h2 id="dialog-title" className="mb-5 text-xl font-bold">{title}</h2>
-      {children}
-    </dialog>
-  );
-}
-
 function EditorFields({ collection, record, parent }: EditorState) {
-  const { clients, projects, today } = useWorkspace();
+  const { clients, personal, projects, access, today } = useWorkspace();
   const invoice = record && "number" in record ? record : undefined;
   const [invoiceStatus, setInvoiceStatus] = useState<InvoiceStatus>(invoice?.status ?? "draft");
 
@@ -122,7 +103,7 @@ function EditorFields({ collection, record, parent }: EditorState) {
         <Field label="Client" name="client_id">
           <select className="field" name="client_id" id="client_id" required defaultValue={project?.client_id ?? parent ?? ""}>
             <option value="">Choisir un client</option>
-            {clients.map(client => <option value={client.id} key={client.id}>{client.name}</option>)}
+            {personal.clients.map(client => <option value={client.id} key={client.id}>{client.name}</option>)}
           </select>
         </Field>
         <Field label="Statut" name="status">
@@ -138,6 +119,12 @@ function EditorFields({ collection, record, parent }: EditorState) {
     );
   }
 
+  const fromProject = invoice && projects.find(project => project.id === invoice.project_id);
+  const available = projects.filter(project => {
+    if (!invoice) return access(project) === "owner" || access(project) === "edit";
+    return project.userId === invoice.userId && (access(invoice) === "owner" ||
+      (access(project) === "edit" && project.client_id === fromProject?.client_id));
+  });
   const paidOn = invoice && knownPaymentDate(invoice);
   return (
     <>
@@ -145,7 +132,9 @@ function EditorFields({ collection, record, parent }: EditorState) {
       <Field label="Projet" name="project_id">
         <select className="field" name="project_id" id="project_id" required defaultValue={invoice?.project_id ?? parent ?? ""}>
           <option value="">Choisir un projet</option>
-          {projects.map(project => <option value={project.id} key={project.id}>{project.title}</option>)}
+          {available.map(project => <option value={project.id} key={project.id}>
+            {project.title}{access(project) === "edit" && ` · ${clients.find(client => client.id === project.client_id)?.name ?? "Client partagé"}`}
+          </option>)}
         </select>
       </Field>
       <Field label="Montant (€)" name="amount">
@@ -186,7 +175,24 @@ function entryPayload(form: HTMLFormElement, collection: Collection, record?: En
 }
 
 export function ResourceDialog({ interaction, onClose }: { interaction: Interaction; onClose: () => void }) {
-  const { user, clients, projects, notify } = useWorkspace();
+  const workspace = useWorkspace();
+  const action = "remove" in interaction ? interaction.remove : interaction.edit;
+  const record = action.record && workspace[action.collection].find(item => item.id === action.record?.id);
+  const permission = record && workspace.access(record);
+  if (action.record && permission !== "owner" &&
+      !("edit" in interaction && action.collection === "invoices" && permission === "edit")) return null;
+  if ("edit" in interaction && interaction.edit.parent && !action.record) {
+    const parent = action.collection === "projects"
+      ? workspace.clients.find(client => client.id === interaction.edit.parent)
+      : workspace.projects.find(project => project.id === interaction.edit.parent);
+    const parentAccess = parent && workspace.access(parent);
+    if (parentAccess !== "owner" && !(action.collection === "invoices" && parentAccess === "edit")) return null;
+  }
+  return <ResourceDialogContent interaction={interaction} onClose={onClose} />;
+}
+
+function ResourceDialogContent({ interaction, onClose }: { interaction: Interaction; onClose: () => void }) {
+  const { user, personal, projects, access, notify } = useWorkspace();
   const router = useRouter();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -196,7 +202,8 @@ export function ResourceDialog({ interaction, onClose }: { interaction: Interact
   const collection = (editing ?? removing)!.collection;
   const resource = resources[collection];
   const missingParent = editing && !editing.record && (
-    (collection === "projects" && clients.length === 0) || (collection === "invoices" && projects.length === 0)
+    (collection === "projects" && personal.clients.length === 0) ||
+    (collection === "invoices" && !projects.some(project => access(project) === "owner" || access(project) === "edit"))
   );
   const title = removing
     ? "Confirmer la suppression"
@@ -267,8 +274,11 @@ export function ResourceTable({ collection, records, empty, onAction }: {
   empty: string;
   onAction: (action: Interaction) => void;
 }) {
-  const { clients, projects, today } = useWorkspace();
-  if (!records.length) return <div className="panel text-slate-600">{empty}</div>;
+  const { clients, projects, today, access, ownerEmail } = useWorkspace();
+  if (!records.length) {
+    return collection === "clients" ? <p className="text-sm text-slate-600 sm:text-base">{empty}</p> :
+      <div className="panel text-slate-600">{empty}</div>;
+  }
 
   const clientNames = new Map(clients.map(client => [client.id, client.name]));
   const projectById = new Map(projects.map(project => [project.id, project]));
@@ -281,9 +291,11 @@ export function ResourceTable({ collection, records, empty, onAction }: {
   return (
     <div className="table-wrap" tabIndex={0} role="region" aria-label={"Liste des " + resources[collection].title.toLowerCase()}>
       <table className="data-table">
-        <thead><tr>{columns.map(column => <th scope="col" key={column}>{column}</th>)}<th scope="col">Actions</th></tr></thead>
+        <thead><tr>{columns.map(column => <th scope="col" key={column}>{column}</th>)}<th scope="col">Accès</th><th scope="col">Actions</th></tr></thead>
         <tbody>
           {records.map(record => {
+            const permission = access(record);
+            if (!permission) return null;
             const title = entityName(record);
             const project = "project_id" in record ? projectById.get(record.project_id) : undefined;
             return (
@@ -309,12 +321,19 @@ export function ResourceTable({ collection, records, empty, onAction }: {
                   </>
                 )}
                 <td>
+                  <AccessBadge access={permission} />
+                  {"name" in record && permission !== "owner" && ownerEmail(record.id) &&
+                    <span className="mt-1 block text-xs text-slate-600">Partagé par {ownerEmail(record.id)}</span>}
+                </td>
+                <td>
                   <div className="flex gap-1">
+                    {"name" in record && permission === "owner" && <ShareButton client={record} iconOnly />}
+                    {(permission === "owner" || (collection === "invoices" && permission === "edit")) &&
                     <button type="button" className="icon-button" aria-label={`Modifier ${title}`} title="Modifier"
-                      onClick={() => onAction({ edit: { collection, record } })}><Pencil size={17} aria-hidden="true" /></button>
-                    <button type="button" className="icon-button text-red-700 hover:bg-red-50"
+                      onClick={() => onAction({ edit: { collection, record } })}><Pencil size={17} aria-hidden="true" /></button>}
+                    {permission === "owner" && <button type="button" className="icon-button text-red-700 hover:bg-red-50"
                       aria-label={`Supprimer ${title}`} title="Supprimer"
-                      onClick={() => onAction({ remove: { collection, record } })}><Trash2 size={17} aria-hidden="true" /></button>
+                      onClick={() => onAction({ remove: { collection, record } })}><Trash2 size={17} aria-hidden="true" /></button>}
                   </div>
                 </td>
               </tr>

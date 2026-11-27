@@ -4,8 +4,10 @@ import type { User } from "firebase/auth";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 import { todayInParis } from "@/lib/domain/format";
-import type { Collection, RecordByCollection } from "@/lib/domain/model";
+import type { SharePermission } from "@/lib/domain/client-sharing";
+import type { Client, Collection, Invoice, Project, RecordByCollection } from "@/lib/domain/model";
 import { subscribeToRecords } from "@/lib/firebase/data";
+import { subscribeToSharedRecords, type SharedRecords } from "@/lib/firebase/shares";
 
 type Records<K extends Collection> = { data: RecordByCollection[K][] | null; failed: boolean };
 
@@ -62,6 +64,10 @@ interface WorkspaceValue {
   clients: RecordByCollection["clients"][];
   projects: RecordByCollection["projects"][];
   invoices: RecordByCollection["invoices"][];
+  personal: Pick<WorkspaceValue, "clients" | "projects" | "invoices">;
+  access: (record: Client | Project | Invoice) => SharePermission | "owner" | undefined;
+  ownerEmail: (clientId: string) => string | undefined;
+  sharedLoading: boolean;
   today: string;
   notify: (message: string) => void;
 }
@@ -72,6 +78,27 @@ export function WorkspaceProvider({ user, children }: { user: User; children: Re
   const clients = useRecords("clients", user.uid);
   const projects = useRecords("projects", user.uid);
   const invoices = useRecords("invoices", user.uid);
+  const [shared, setShared] = useState<SharedRecords>();
+  const [shareFailed, setShareFailed] = useState(false);
+  const [shareAttempt, setShareAttempt] = useState(0);
+  useEffect(() => {
+    const fail = () => setShareFailed(true);
+    const timeout = window.setTimeout(fail, 15_000);
+    let stop: (() => void) | undefined;
+    try {
+      stop = subscribeToSharedRecords(user.uid, data => {
+        if (!data.loading) window.clearTimeout(timeout);
+        setShared(data);
+      }, fail);
+    } catch {
+      window.clearTimeout(timeout);
+      queueMicrotask(fail);
+    }
+    return () => {
+      window.clearTimeout(timeout);
+      stop?.();
+    };
+  }, [user.uid, shareAttempt]);
   const today = useToday();
   const [notice, setNotice] = useState("");
 
@@ -92,13 +119,40 @@ export function WorkspaceProvider({ user, children }: { user: User; children: Re
     return <main className="panel" role="status">Chargement de tes données…</main>;
   }
 
-  const value = { user, clients: clients.data, projects: projects.data, invoices: invoices.data, today, notify: setNotice };
+  const personal = { clients: clients.data, projects: projects.data, invoices: invoices.data };
+  const allProjects = [...personal.projects, ...(shared?.projects ?? [])];
+  const projectById = new Map(allProjects.map(project => [project.id, project]));
+  const value: WorkspaceValue = {
+    user, personal, today, notify: setNotice,
+    clients: [...personal.clients, ...(shared?.clients ?? [])],
+    projects: allProjects,
+    invoices: [...personal.invoices, ...(shared?.invoices ?? [])],
+    sharedLoading: !shareFailed && (!shared || shared.loading),
+    ownerEmail: id => shared?.shares.get(id)?.ownerEmail,
+    access(record) {
+      if (record.userId === user.uid) return "owner";
+      const clientId = "name" in record ? record.id :
+        "client_id" in record ? record.client_id : projectById.get(record.project_id)?.client_id;
+      const share = clientId && shared?.shares.get(clientId);
+      return share && share.ownerId === record.userId ? share.permission : undefined;
+    },
+  };
   return (
     <WorkspaceContext.Provider value={value}>
       {notice && (
         <div className="notice-success mb-5 flex flex-wrap items-center justify-between gap-3">
           <p role="status">{notice}</p>
           <button type="button" className="font-semibold underline" onClick={() => setNotice("")}>Fermer le message</button>
+        </div>
+      )}
+      {shareFailed && (
+        <div className="notice-error mb-5 flex flex-wrap items-center justify-between gap-3">
+          <p role="alert">Impossible de charger tous les accès partagés.</p>
+          <button className="font-semibold underline" type="button" onClick={() => {
+            setShared(undefined);
+            setShareFailed(false);
+            setShareAttempt(attempt => attempt + 1);
+          }}>Réessayer</button>
         </div>
       )}
       {children}

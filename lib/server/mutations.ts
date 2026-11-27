@@ -1,13 +1,15 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { FieldValue, type DocumentReference, type Transaction } from "firebase-admin/firestore";
+import { FieldValue, type DocumentData, type DocumentReference, type Transaction } from "firebase-admin/firestore";
 
 import { todayInParis } from "@/lib/domain/format";
 import { invoiceProjectId, invoiceProjectTitle, readInvoiceCsvFields, validateImportedInvoice } from "@/lib/domain/invoice-import";
 import { notFoundMessage, type Collection, type InvoiceInput, type InvoiceStatus } from "@/lib/domain/model";
 import { BusinessError, paymentDate, validate, validateStatus } from "@/lib/domain/validation";
 import { getAdminFirestore } from "@/lib/firebase/admin";
+
+import { clientMembers, invoiceProject, missingResource } from "./client-access";
 
 const parents = {
   clients: { count: "projectCount", blocked: "Impossible de supprimer ce client : des projets lui sont encore associés." },
@@ -25,6 +27,10 @@ async function owned(tx: Transaction, ref: DocumentReference, userId: string) {
 async function readParent(tx: Transaction, collection: ParentCollection, id: string, userId: string) {
   const ref = getAdminFirestore().collection(collection).doc(id);
   const data = await owned(tx, ref, userId);
+  return parentCount(ref, collection, data);
+}
+
+function parentCount(ref: DocumentReference, collection: ParentCollection, data: DocumentData) {
   const field = parents[collection].count;
   const count: unknown = data[field];
   if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
@@ -50,13 +56,19 @@ async function checkReservation(
   tx: Transaction, ref: DocumentReference, userId: string, invoiceId: string,
 ) {
   const data = (await tx.get(ref)).data();
-  if (!data || data.invoiceId !== invoiceId || data.userId !== userId) {
+  if (!data) return false;
+  if (data.invoiceId !== invoiceId || data.userId !== userId) {
     throw new BusinessError("La réservation de ce numéro de facture doit être vérifiée.", 409);
   }
+  return true;
 }
 
-async function requireAvailableNumber(tx: Transaction, ref: DocumentReference) {
-  if ((await tx.get(ref)).exists) {
+async function requireAvailableNumber(
+  tx: Transaction, ref: DocumentReference, userId: string, number: string, currentId: string,
+) {
+  const matches = getAdminFirestore().collection("invoices")
+    .where("userId", "==", userId).where("number", "==", number).limit(2);
+  if ((await tx.get(ref)).exists || (await tx.get(matches)).docs.some(doc => doc.id !== currentId)) {
     throw new BusinessError("Ce numéro de facture est déjà utilisé.", 409);
   }
 }
@@ -110,32 +122,42 @@ export async function saveRecord(collection: Collection, userId: string, input: 
   return ref.id;
 }
 
+async function editableInvoice(tx: Transaction, ref: DocumentReference, actorId: string) {
+  const current = (await tx.get(ref)).data();
+  if (!current) missingResource();
+  const access = await invoiceProject(tx, current.project_id, actorId);
+  if (current.userId !== access.ownerId) missingResource();
+  return { current, access };
+}
+
 async function writeInvoice(
-  tx: Transaction, ref: DocumentReference, userId: string, fields: InvoiceInput,
+  tx: Transaction, ref: DocumentReference, actorId: string, fields: InvoiceInput,
   { id, defaultDate }: { id?: string; defaultDate?: string } = {},
 ) {
-  const current = id ? await owned(tx, ref, userId) : undefined;
+  const existing = id ? await editableInvoice(tx, ref, actorId) : undefined;
+  const current = existing?.current;
+  const moved = existing && current?.project_id !== fields.project_id;
+  const access = !existing || moved
+    ? await invoiceProject(tx, fields.project_id, actorId) : existing.access;
+  const { ownerId } = access;
+  if (existing && (existing.access.ownerId !== ownerId ||
+      (actorId !== ownerId && existing.access.clientId !== access.clientId))) missingResource();
   const payment = invoicePaymentFields(fields, current, defaultDate);
-  const project = await readParent(tx, "projects", fields.project_id, userId);
-  const oldProject = current && current.project_id !== fields.project_id
-    ? await readParent(tx, "projects", current.project_id, userId)
-    : undefined;
-  const numberRef = reservation(userId, fields.number);
-  const oldNumberRef = current ? reservation(userId, current.number) : undefined;
+  const numberRef = reservation(ownerId, fields.number);
+  const oldNumberRef = current ? reservation(ownerId, current.number) : undefined;
   const numberChanged = oldNumberRef?.id !== numberRef.id;
 
-  if (oldNumberRef) await checkReservation(tx, oldNumberRef, userId, ref.id);
-  if (numberChanged) await requireAvailableNumber(tx, numberRef);
-
-  if (numberChanged) {
-    tx.create(numberRef, { userId, invoiceId: ref.id });
-    if (oldNumberRef) tx.delete(oldNumberRef);
+  const reserved = oldNumberRef && await checkReservation(tx, oldNumberRef, ownerId, ref.id);
+  if (numberChanged || !reserved) {
+    await requireAvailableNumber(tx, numberRef, ownerId, fields.number, ref.id);
+    tx.create(numberRef, { userId: ownerId, invoiceId: ref.id });
+    if (oldNumberRef && reserved) tx.delete(oldNumberRef);
   }
 
-  if (!current || oldProject) changeCount(tx, project, 1);
-  if (oldProject) changeCount(tx, oldProject, -1);
+  if (!current || moved) changeCount(tx, parentCount(access.ref, "projects", access.project), 1);
+  if (moved) changeCount(tx, parentCount(existing.access.ref, "projects", existing.access.project), -1);
   if (current) tx.update(ref, { ...fields, ...payment });
-  else tx.create(ref, { ...fields, ...payment, userId });
+  else tx.create(ref, { ...fields, ...payment, userId: ownerId });
 }
 
 export async function importInvoice(userId: string, input: unknown) {
@@ -150,10 +172,6 @@ export async function importInvoice(userId: string, input: unknown) {
     const projectId = invoiceProjectId(matches.docs.map(project => project.id));
     const { invoice } = validateImportedInvoice(fields, projectId);
 
-    // Older documents may already use the number without having a reservation.
-    const invoiceQuery = db.collection("invoices").where("userId", "==", userId).where("number", "==", invoice.number).limit(1);
-    if (!(await tx.get(invoiceQuery)).empty) throw new BusinessError("Ce numéro de facture est déjà utilisé.", 409);
-
     await writeInvoice(tx, ref, userId, invoice);
   });
   return ref.id;
@@ -166,11 +184,14 @@ export async function updateStatus(collection: Collection, userId: string, id: s
   const ref = db.collection(collection).doc(id);
   const today = todayInParis();
   await db.runTransaction(async tx => {
-    const current = await owned(tx, ref, userId);
-    const payment = collection === "invoices"
-      ? invoicePaymentFields({ issued_on: current.issued_on, status: status as InvoiceStatus }, current, today)
-      : {};
-    tx.update(ref, { status, ...payment });
+    if (collection === "invoices") {
+      const { current } = await editableInvoice(tx, ref, userId);
+      const payment = invoicePaymentFields({ issued_on: current.issued_on, status: status as InvoiceStatus }, current, today);
+      tx.update(ref, { status, ...payment });
+    } else {
+      await owned(tx, ref, userId);
+      tx.update(ref, { status });
+    }
   });
 }
 
@@ -182,9 +203,9 @@ export async function deleteRecord(collection: Collection, userId: string, id: s
       const current = await owned(tx, ref, userId);
       const project = await readParent(tx, "projects", current.project_id, userId);
       const numberRef = reservation(userId, current.number);
-      await checkReservation(tx, numberRef, userId, id);
+      const reserved = await checkReservation(tx, numberRef, userId, id);
       changeCount(tx, project, -1);
-      tx.delete(numberRef);
+      if (reserved) tx.delete(numberRef);
     } else {
       const resource = await readParent(tx, collection, id, userId);
       if (resource.count > 0) throw new BusinessError(parents[collection].blocked, 409);
@@ -192,6 +213,9 @@ export async function deleteRecord(collection: Collection, userId: string, id: s
         const current = await owned(tx, ref, userId);
         const client = await readParent(tx, "clients", current.client_id, userId);
         changeCount(tx, client, -1);
+      } else {
+        const shares = await tx.get(clientMembers(id));
+        for (const share of shares.docs) tx.delete(share.ref);
       }
     }
     tx.delete(ref);

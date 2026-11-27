@@ -15,7 +15,7 @@ export function subscribeToRecords<K extends Collection>(
   }, onError);
 }
 
-async function requestMutation(
+export async function requestMutation(
   user: User,
   path: string,
   method: "POST" | "PUT" | "PATCH" | "DELETE",

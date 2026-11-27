@@ -8,7 +8,7 @@ import { useWorkspace } from "./context";
 import { Heading, LateBadge } from "./resources";
 
 export function Dashboard() {
-  const { clients, projects, invoices, today } = useWorkspace();
+  const { personal: { clients, projects, invoices }, today } = useWorkspace();
   const sent = invoices.filter(invoice => invoice.status === "sent");
   const overdue = sent.filter(invoice => overdueDays(invoice, today) > 0)
     .sort((left, right) => left.due_on.localeCompare(right.due_on));
