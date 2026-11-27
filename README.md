@@ -2,7 +2,16 @@
 
 FreelanceDesk permet à un freelance de gérer ses clients, ses projets et ses factures dans un espace personnel. Le tableau de bord présente les projets en cours, les montants encaissés et à encaisser, ainsi que les factures en retard.
 
-L’application utilise Next.js App Router, React, TypeScript, Tailwind CSS, Lucide React, Firebase Authentication et Cloud Firestore. Git suit les sources et le fichier de verrouillage npm.
+La page **Finances** (`/finances`) analyse les données du compte connecté. Elle présente le chiffre d’affaires facturé et encaissé, les factures à encaisser ou en retard, le délai et le panier moyens, le taux de paiement et le nombre de factures encaissées.
+
+L’application utilise Next.js App Router, React, TypeScript, Tailwind CSS, Lucide React, Recharts, Firebase Authentication et Cloud Firestore. Git suit les sources et le fichier de verrouillage npm.
+
+## Tableau de bord financier
+
+- Le filtre couvre **3, 6 ou 12 mois calendaires**, mois en cours compris, dans le fuseau `Europe/Paris`. La période par défaut est de 6 mois.
+- Recharts affiche les montants facturés et encaissés par mois, la répartition des factures émises par statut, les cinq premiers clients par encaissements et le délai moyen mensuel. Les graphiques mensuels donnent aussi accès aux valeurs sous forme de tableau.
+- Les cartes « Montant en attente de paiement » et « Montant en retard », ainsi que le tableau des retards, décrivent la situation actuelle. La carte « Encaissé le mois précédent » affiche le total du dernier mois calendaire terminé, indépendamment du filtre choisi.
+- Les factures payées sans date exploitable contribuent au total encaissé toutes périodes. Elles sont exclues des calculs qui utilisent la date d’encaissement et sont signalées dans « Qualité des données de paiement ». Ouvre leur fiche et utilise **Modifier** pour compléter la date réelle.
 
 ## Installation et lancement
 
@@ -71,18 +80,35 @@ Les identifiants des documents sont natifs. Chaque document métier possède un 
 
 ```mermaid
 erDiagram
-    FIREBASE_AUTH ||--o{ CLIENTS : possède
+    FIREBASE_AUTH ||--o{ CLIENTS : "userId"
+    FIREBASE_AUTH ||--o{ PROJECTS : "userId"
+    FIREBASE_AUTH ||--o{ INVOICES : "userId"
     CLIENTS ||--o{ PROJECTS : "client_id"
     PROJECTS ||--o{ INVOICES : "project_id"
+    INVOICES ||--o| INVOICE_NUMBER_RESERVATIONS : "invoiceId"
+    INVOICES {
+        string userId
+        string project_id
+        string number
+        number amount
+        string issued_on
+        string due_on
+        string status
+        string paid_on "facultatif"
+    }
 ```
 
 | Collection | Champs métier | Champ technique |
 |---|---|---|
 | `clients` | `userId`, `name`, `email` (facultatif), `city` (facultatif) | `projectCount` |
 | `projects` | `userId`, `client_id`, `title`, `status`, `daily_rate`, `start_date` | `invoiceCount` |
-| `invoices` | `userId`, `project_id`, `number`, `amount`, `issued_on`, `due_on`, `status` | Aucun |
+| `invoices` | `userId`, `project_id`, `number`, `amount`, `issued_on`, `due_on`, `status`, `paid_on` (facultatif) | Aucun |
 
 Les dates sont des chaînes de calendrier `AAAA-MM-JJ` en base et s’affichent en `JJ/MM/AAAA`. Les jours de retard se calculent à partir de la date civile en `Europe/Paris`. Une facture est en retard uniquement si son statut vaut `sent` et si son échéance est strictement antérieure à cette date.
+
+`paid_on` enregistre la date réelle de paiement. La date du jour à Paris est enregistrée par défaut lors de la saisie manuelle d’un nouveau paiement. La date peut être corrigée depuis la facture et doit être égale ou postérieure à sa date d’émission. Les règles et index Firestore existants suffisent. L’évolution est détaillée dans [la note de migration Firestore](docs/migrations/002_add_paid_on.md).
+
+Le CSV conserve les colonnes obligatoires `project_title,number,amount,issued_on,due_on,status`. La colonne facultative `paid_on` accepte une date `AAAA-MM-JJ` pour une facture payée. Les fichiers à six colonnes restent compatibles. À l’import, une facture payée dont la date est vide ou absente conserve une date inconnue.
 
 | Donnée | Statuts et libellés |
 |---|---|
@@ -113,9 +139,26 @@ firebase emulators:exec --project demo-freelancedesk --only auth,firestore "npm 
 
 La suite Firebase requiert la CLI Firebase et un JDK 21. Elle démarre un serveur Next.js de test sur le port 3100 et utilise les émulateurs locaux sur 9099 et 8080. Le projet de démonstration ne requiert aucun identifiant Admin réel. [Configuration des émulateurs Firebase](https://firebase.google.com/docs/emulator-suite/install_and_configure)
 
-Le lint, TypeScript, le build de production, les deux tests unitaires de dates et les six scénarios Auth et Firestore sur émulateurs ont réussi. Les scénarios Firebase couvrent notamment l’isolation entre comptes et les transactions concurrentes. Un parcours Chrome sur les émulateurs a également vérifié la création d’un client, d’un projet et d’une facture, les indicateurs du tableau de bord, la persistance et la protection des fiches ouvertes par URL.
+Les tests incluent les périodes, les calculs financiers de référence, la compatibilité des anciennes factures et les transitions de `paid_on`. Les scénarios Firebase couvrent aussi l’isolation entre comptes et les transactions concurrentes. Les résultats du TP 6 figurent dans [le compte rendu de validation](docs/TP6-validation.md).
 
-Sur le projet Firebase cible, la recette finale des données reste à faire après la configuration Admin et le déploiement des règles. La vérification de la réception et de l’utilisation du lien de réinitialisation se fait également sur ce projet. La checklist de recette figure dans [docs/TESTS.md](docs/TESTS.md).
+La vérification du lien de réinitialisation et la recette sur le projet Firebase cible figurent dans [la checklist de recette](docs/TESTS.md).
+
+### Recalculer les encaissements du mois précédent
+
+Depuis la racine du projet, utilise un compte Firebase Authentication avec connexion par e-mail et mot de passe. Le script demande le mot de passe en saisie masquée et lit uniquement les factures de ce compte. Compare le total obtenu à la carte **Encaissé le mois précédent** de la page Finances, en utilisant le même compte et le même projet Firebase.
+
+```sh
+node --env-file=.env.local scripts/verify-financial-dashboard.ts compte@example.test
+```
+
+Pour un compte créé sur les émulateurs, exécute cette commande pendant que les services Auth et Firestore locaux sont actifs.
+
+```sh
+env FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+  npm run verify:finances -- --emulator compte@example.test
+```
+
+Le script utilise le SDK Web et les règles Firestore du compte. Il affiche le mois analysé, les numéros et montants des factures retenues, leur nombre et le total en euros. Il fonctionne sans identifiants Admin.
 
 ## Différences avec le TP Supabase
 

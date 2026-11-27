@@ -4,7 +4,7 @@ import { Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 
-import { formatDate, formatMoney, overdueDays } from "@/lib/domain/format";
+import { formatDate, formatMoney, knownPaymentDate, overdueDays } from "@/lib/domain/format";
 import { invoiceStatuses, projectStatuses, type Collection } from "@/lib/domain/model";
 import { mutate } from "@/lib/firebase/data";
 import { useWorkspace } from "./context";
@@ -76,6 +76,7 @@ export function ResourceDetail({ collection, id }: { collection: Collection; id:
   const record = client ?? invoice ?? (collection === "projects" ? project : undefined);
 
   if (!record) return <MissingRecord collection={collection} />;
+  const paidOn = invoice && knownPaymentDate(invoice);
 
   const fields = client ? [
     { label: "Adresse e-mail", value: client.email ? <a className="table-link" href={"mailto:" + client.email}>{client.email}</a> : undefined },
@@ -86,6 +87,7 @@ export function ResourceDetail({ collection, id }: { collection: Collection; id:
     { label: "Montant", value: formatMoney(invoice.amount) },
     { label: "Date d’émission", value: formatDate(invoice.issued_on) },
     { label: "Date d’échéance", value: formatDate(invoice.due_on) },
+    ...(invoice.status === "paid" ? [{ label: "Date de paiement", value: paidOn ? formatDate(paidOn) : "Date à renseigner" }] : []),
     { label: "Statut", value: <div className="flex flex-wrap gap-2"><Badge collection="invoices" status={invoice.status} /><LateBadge days={overdueDays(invoice, today)} /></div> },
   ] : project ? [
     { label: "Client", value: relatedClient && <Link className="table-link" href={`/clients/${encodeURIComponent(relatedClient.id)}`}>{relatedClient.name}</Link> },

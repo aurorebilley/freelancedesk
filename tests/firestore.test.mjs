@@ -10,6 +10,8 @@ import {
   getFirestore, query, setDoc, terminate, updateDoc, where,
 } from "firebase/firestore";
 
+import { todayInParis } from "../lib/domain/format.ts";
+
 const projectId = "demo-freelancedesk";
 const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
 const dbHost = process.env.FIRESTORE_EMULATOR_HOST;
@@ -215,6 +217,83 @@ test("API : validation des champs, des dates, des montants et des statuts", asyn
   await expectStatus(await api("PATCH", path("projects", project), user, { status: "done" }), 204);
   assert.equal((await getDocFromServer(doc(db, "invoices", invoice))).data().status, "paid");
   assert.equal((await getDocFromServer(doc(db, "projects", project))).data().status, "done");
+});
+
+test("Factures : enregistrement, correction et réinitialisation de la date de paiement", async () => {
+  const { user, db } = await createAccount();
+  const { project } = await chain(user);
+  const fields = sampleInvoice(project);
+  const id = await create("invoices", user, fields);
+  const invoicePath = path("invoices", id);
+  const data = async invoiceId => (await getDocFromServer(doc(db, "invoices", invoiceId))).data();
+  assert.equal(await data(id).then(record => Object.hasOwn(record, "paid_on")), false);
+  const draft = await create("invoices", user, { ...sampleInvoice(project), status: "draft" });
+  assert.equal(await data(draft).then(record => Object.hasOwn(record, "paid_on")), false);
+
+  const today = todayInParis();
+  const directlyPaid = await create("invoices", user, { ...sampleInvoice(project), status: "paid" });
+  assert.equal((await data(directlyPaid)).paid_on, today);
+  const paid = { ...fields, status: "paid" };
+  const paidOn = "2026-05-19";
+  await expectStatus(await api("PATCH", invoicePath, user, { status: "paid" }), 204);
+  assert.equal((await data(id)).paid_on, today);
+  for (const invalid of ["2026-02-29", "2026-05-11", "2026-5-19", null]) {
+    await expectStatus(await api("PUT", invoicePath, user, { ...paid, paid_on: invalid }), 400);
+  }
+  await expectStatus(await api("PUT", invoicePath, user, { ...fields, paid_on: paidOn }), 400);
+  await expectStatus(await api("PUT", invoicePath, user, { ...paid, paid_on: paidOn }), 200);
+  assert.equal((await data(id)).paid_on, paidOn);
+  await expectStatus(await api("PUT", invoicePath, user, { ...paid, amount: 25 }), 200);
+  await expectStatus(await api("PATCH", invoicePath, user, { status: "paid" }), 204);
+  assert.equal((await data(id)).paid_on, paidOn);
+  await expectStatus(await api("PUT", invoicePath, user, { ...paid, issued_on: "2026-05-20" }), 400);
+  assert.equal((await data(id)).paid_on, paidOn);
+
+  await expectStatus(await api("PUT", invoicePath, user, { ...fields, status: "draft" }), 200);
+  assert.equal(Object.hasOwn(await data(id), "paid_on"), false);
+  await expectStatus(await api("PUT", invoicePath, user, paid), 200);
+  assert.equal((await data(id)).paid_on, today);
+  await expectStatus(await api("PATCH", invoicePath, user, { status: "cancelled" }), 204);
+  assert.equal(Object.hasOwn(await data(id), "paid_on"), false);
+
+  const nextDay = new Date(Date.parse(today) + 86_400_000).toISOString().slice(0, 10);
+  const future = { ...sampleInvoice(project), issued_on: nextDay, due_on: nextDay };
+  const futureId = await create("invoices", user, future);
+  await expectStatus(await api("PATCH", path("invoices", futureId), user, { status: "paid" }), 400);
+  assert.equal((await data(futureId)).status, "sent");
+});
+
+test("Import CSV : dates payées valides, lignes rejetées et compatibilité historique", async () => {
+  const { user, db } = await createAccount();
+  const { project } = await chain(user);
+  const fields = {
+    project_title: "Projet émulateur", number: "TP6-HIST", amount: "33.33",
+    issued_on: "2026-05-12", due_on: "2026-05-31", status: "Payée",
+  };
+  const historicalId = await create("invoice-import", user, fields);
+  const stored = async id => (await getDocFromServer(doc(db, "invoices", id))).data();
+  const historical = { ...sampleInvoice(project, fields.number), status: "paid" };
+  await expectStatus(await api("PUT", path("invoices", historicalId), user, historical), 200);
+  assert.equal(Object.hasOwn(await stored(historicalId), "paid_on"), false);
+  await expectStatus(await api("PATCH", path("invoices", historicalId), user, { status: "paid" }), 204);
+  assert.equal(Object.hasOwn(await stored(historicalId), "paid_on"), false);
+  await expectStatus(await api("PUT", path("invoices", historicalId), user, { ...historical, paid_on: "2026-05-14" }), 200);
+  assert.equal((await stored(historicalId)).paid_on, "2026-05-14");
+
+  const dated = { ...fields, number: "TP6-DATED", paid_on: "2026-05-23" };
+  const datedId = await create("invoice-import", user, dated);
+  assert.equal((await stored(datedId)).paid_on, dated.paid_on);
+  await expectStatus(await api("POST", "invoice-import", user, dated), 409);
+  const blankId = await create("invoice-import", user, { ...fields, number: "TP6-BLANK", paid_on: "" });
+  assert.equal(Object.hasOwn(await stored(blankId), "paid_on"), false);
+  for (const changes of [
+    { paid_on: "2026-02-30" }, { paid_on: "2026-05-10" },
+    { paid_on: dated.paid_on, status: "Envoyée" }, { paid_on: 20260523 },
+  ]) {
+    await expectStatus(await api("POST", "invoice-import", user, { ...fields, number: "TP6-REJECTED", ...changes }), 400);
+  }
+  const invoices = await getDocsFromServer(query(collection(db, "invoices"), where("userId", "==", user.uid)));
+  assert.equal(invoices.size, 3);
 });
 
 test("API : unicité concurrente par compte, renumérotation et libération du numéro", async () => {

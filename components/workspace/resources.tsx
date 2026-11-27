@@ -5,10 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
-import { formatDate, formatMoney, overdueDays } from "@/lib/domain/format";
+import { formatDate, formatMoney, knownPaymentDate, overdueDays } from "@/lib/domain/format";
 import {
   invoiceStatuses, notFoundMessage, projectStatuses,
-  type Client, type Collection, type Invoice, type Project,
+  type Client, type Collection, type Invoice, type InvoiceStatus, type Project,
 } from "@/lib/domain/model";
 import { validate } from "@/lib/domain/validation";
 import { mutate } from "@/lib/firebase/data";
@@ -100,6 +100,8 @@ export function Modal({ title, locked, onClose, children, wide = false }: {
 
 function EditorFields({ collection, record, parent }: EditorState) {
   const { clients, projects, today } = useWorkspace();
+  const invoice = record && "number" in record ? record : undefined;
+  const [invoiceStatus, setInvoiceStatus] = useState<InvoiceStatus>(invoice?.status ?? "draft");
 
   if (collection === "clients") {
     const client = record && "name" in record ? record : undefined;
@@ -136,7 +138,7 @@ function EditorFields({ collection, record, parent }: EditorState) {
     );
   }
 
-  const invoice = record && "number" in record ? record : undefined;
+  const paidOn = invoice && knownPaymentDate(invoice);
   return (
     <>
       <Field label="Numéro de facture" name="number"><input className="field" name="number" id="number" required maxLength={160} defaultValue={invoice?.number} /></Field>
@@ -154,18 +156,32 @@ function EditorFields({ collection, record, parent }: EditorState) {
         <Field label="Date d’échéance" name="due_on"><input className="field" name="due_on" id="due_on" type="date" required defaultValue={invoice?.due_on ?? today} /></Field>
       </div>
       <Field label="Statut" name="status">
-        <select className="field" name="status" id="status" defaultValue={invoice?.status ?? "draft"}>
+        <select className="field" name="status" id="status" value={invoiceStatus}
+          onChange={event => setInvoiceStatus(event.target.value as InvoiceStatus)}>
           {Object.entries(invoiceStatuses).map(([value, title]) => <option key={value} value={value}>{title}</option>)}
         </select>
       </Field>
+      {invoiceStatus === "paid" && (
+        <Field label="Date de paiement" name="paid_on">
+          <input className="field" name="paid_on" id="paid_on" type="date" defaultValue={paidOn} aria-describedby="paid-on-help" />
+          <p className="mt-1.5 text-sm text-slate-600" id="paid-on-help">
+            {paidOn ? "Corrige la date si nécessaire."
+              : invoice?.status === "paid" ? "Renseigne la date réelle si tu la connais."
+                : "Si tu laisses le champ vide, la date du jour à Paris sera enregistrée."}
+          </p>
+        </Field>
+      )}
     </>
   );
 }
 
-function entryPayload(form: HTMLFormElement, collection: Collection) {
+function entryPayload(form: HTMLFormElement, collection: Collection, record?: Entity) {
   const data: Record<string, unknown> = Object.fromEntries(new FormData(form));
   if (collection === "projects") data.daily_rate = Number(data.daily_rate);
-  if (collection === "invoices") data.amount = Number(data.amount);
+  if (collection === "invoices") {
+    data.amount = Number(data.amount);
+    if (record && "number" in record && data.paid_on === record.paid_on) delete data.paid_on;
+  }
   return validate(collection, data);
 }
 
@@ -199,7 +215,7 @@ export function ResourceDialog({ interaction, onClose }: { interaction: Interact
         if (removing.redirect) router.replace(removing.redirect);
         notify(resource.deleted);
       } else if (editing) {
-        const payload = entryPayload(form, collection);
+        const payload = entryPayload(form, collection, editing.record);
         await mutate(user, collection, editing.record ? "PUT" : "POST", editing.record?.id, payload);
         notify(editing.record ? resource.saved : resource.created);
       }

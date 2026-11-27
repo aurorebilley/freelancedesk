@@ -5,6 +5,7 @@ import {
   projectStatuses,
   type Collection,
   type InputByCollection,
+  type InvoiceInput,
 } from "./model";
 
 export class BusinessError extends Error {
@@ -53,6 +54,19 @@ function date(value: unknown, label: string) {
   return value;
 }
 
+export function paymentDate(value: unknown, invoice: Pick<InvoiceInput, "status" | "issued_on">) {
+  if (value === undefined || value === "") return undefined;
+  if (invoice.status !== "paid") {
+    throw new BusinessError("La date de paiement est réservée aux factures payées.");
+  }
+  const paidOn = date(value, "La date de paiement");
+  date(invoice.issued_on, "La date d’émission");
+  if (paidOn < invoice.issued_on) {
+    throw new BusinessError("La date de paiement ne peut pas être antérieure à la date d’émission.");
+  }
+  return paidOn;
+}
+
 function parent(value: unknown, label: string) {
   if (!isDocumentId(value)) throw new BusinessError(label);
   return value;
@@ -87,13 +101,13 @@ const parsers: { [K in Collection]: (input: Record<string, unknown>) => InputByC
     };
   },
   invoices(data) {
-    checkFields(data, ["project_id", "number", "amount", "issued_on", "due_on", "status"]);
+    checkFields(data, ["project_id", "number", "amount", "issued_on", "due_on", "status", "paid_on"]);
     const issued_on = date(data.issued_on, "La date d’émission");
     const due_on = date(data.due_on, "La date d’échéance");
     if (due_on < issued_on) {
       throw new BusinessError("La date d’échéance ne peut pas être antérieure à la date d’émission.");
     }
-    return {
+    const fields = {
       project_id: parent(data.project_id, "Sélectionne un projet."),
       number: required(data.number, "Le numéro de facture"),
       amount: amount(data.amount, "Le montant"),
@@ -101,6 +115,8 @@ const parsers: { [K in Collection]: (input: Record<string, unknown>) => InputByC
       due_on,
       status: status(data.status, invoiceStatuses),
     };
+    const paidOn = paymentDate(data.paid_on, fields);
+    return paidOn === undefined ? fields : { ...fields, paid_on: paidOn };
   },
 };
 

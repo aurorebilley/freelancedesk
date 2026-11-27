@@ -4,12 +4,12 @@ import { useRef, useState, type FormEvent } from "react";
 
 import { formatDate, formatMoney } from "@/lib/domain/format";
 import { analyzeInvoiceCsv, type ImportRow } from "@/lib/domain/invoice-csv";
-import { invoiceCsvColumns } from "@/lib/domain/invoice-import";
+import { invoiceCsvAllowedColumns } from "@/lib/domain/invoice-import";
 import { importInvoice } from "@/lib/firebase/data";
 import { useWorkspace } from "./context";
 import { Badge, Modal } from "./resources";
 
-const template = "data:text/csv;charset=utf-8," + encodeURIComponent(invoiceCsvColumns.join(",") + "\r\n");
+const template = "data:text/csv;charset=utf-8," + encodeURIComponent(invoiceCsvAllowedColumns.join(",") + "\r\n");
 const rowBadges = {
   valid: { label: "Valide", color: "bg-emerald-50 text-emerald-800" },
   converted: { label: "Statut converti", color: "bg-amber-50 text-amber-900" },
@@ -53,7 +53,7 @@ function Preview({ rows }: { rows: ImportRow[] }) {
     </dl>
     <div className="table-wrap mt-4 max-h-80" role="region" aria-label="Aperçu des factures à importer" tabIndex={0}>
       <table className="data-table">
-        <thead><tr>{["Ligne", "Facture", "Projet", "Montant", "Émission", "Échéance", "Statut", "Validation", "Détail"].map(label =>
+        <thead><tr>{["Ligne", "Facture", "Projet", "Montant", "Émission", "Échéance", "Paiement", "Statut", "Validation", "Détail"].map(label =>
           <th key={label} scope="col">{label}</th>,
         )}</tr></thead>
         <tbody>{rows.map(row => {
@@ -67,6 +67,7 @@ function Preview({ rows }: { rows: ImportRow[] }) {
             <td className="whitespace-nowrap">{invoice ? formatMoney(invoice.amount) : fields.amount || "—"}</td>
             <td>{invoice ? formatDate(invoice.issued_on) : fields.issued_on || "—"}</td>
             <td>{invoice ? formatDate(invoice.due_on) : fields.due_on || "—"}</td>
+            <td>{invoice?.paid_on ? formatDate(invoice.paid_on) : invoice?.status === "paid" ? "Date inconnue" : fields.paid_on || "—"}</td>
             <td>{invoice ? <Badge collection="invoices" status={invoice.status} /> : fields.status || "—"}</td>
             <td><span className={`badge ${badge.color}`}>{badge.label}</span></td>
             <td className="min-w-40 wrap-anywhere">

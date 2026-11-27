@@ -1,11 +1,12 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import type { DocumentReference, Transaction } from "firebase-admin/firestore";
+import { FieldValue, type DocumentReference, type Transaction } from "firebase-admin/firestore";
 
+import { todayInParis } from "@/lib/domain/format";
 import { invoiceProjectId, invoiceProjectTitle, readInvoiceCsvFields, validateImportedInvoice } from "@/lib/domain/invoice-import";
-import { notFoundMessage, type Collection, type InvoiceInput } from "@/lib/domain/model";
-import { BusinessError, validate, validateStatus } from "@/lib/domain/validation";
+import { notFoundMessage, type Collection, type InvoiceInput, type InvoiceStatus } from "@/lib/domain/model";
+import { BusinessError, paymentDate, validate, validateStatus } from "@/lib/domain/validation";
 import { getAdminFirestore } from "@/lib/firebase/admin";
 
 const parents = {
@@ -60,6 +61,18 @@ async function requireAvailableNumber(tx: Transaction, ref: DocumentReference) {
   }
 }
 
+function invoicePaymentFields(
+  invoice: Pick<InvoiceInput, "issued_on" | "status" | "paid_on">,
+  current: { status?: unknown; paid_on?: unknown } | undefined,
+  defaultDate?: string,
+) {
+  if (invoice.status !== "paid") return current ? { paid_on: FieldValue.delete() } : {};
+  const value = invoice.paid_on ?? (current?.status === "paid" ? current.paid_on ?? undefined : defaultDate);
+  const paidOn = paymentDate(value, invoice);
+  if (paidOn !== undefined) return { paid_on: paidOn };
+  return current ? { paid_on: FieldValue.delete() } : {};
+}
+
 export async function saveRecord(collection: Collection, userId: string, input: unknown, id?: string) {
   const db = getAdminFirestore();
   const ref = id ? db.collection(collection).doc(id) : db.collection(collection).doc();
@@ -90,14 +103,19 @@ export async function saveRecord(collection: Collection, userId: string, input: 
     });
   } else {
     const fields = validate(collection, input);
-    await db.runTransaction(tx => writeInvoice(tx, ref, userId, fields, id));
+    const today = todayInParis();
+    await db.runTransaction(tx => writeInvoice(tx, ref, userId, fields, { id, defaultDate: today }));
   }
 
   return ref.id;
 }
 
-async function writeInvoice(tx: Transaction, ref: DocumentReference, userId: string, fields: InvoiceInput, id?: string) {
+async function writeInvoice(
+  tx: Transaction, ref: DocumentReference, userId: string, fields: InvoiceInput,
+  { id, defaultDate }: { id?: string; defaultDate?: string } = {},
+) {
   const current = id ? await owned(tx, ref, userId) : undefined;
+  const payment = invoicePaymentFields(fields, current, defaultDate);
   const project = await readParent(tx, "projects", fields.project_id, userId);
   const oldProject = current && current.project_id !== fields.project_id
     ? await readParent(tx, "projects", current.project_id, userId)
@@ -116,8 +134,8 @@ async function writeInvoice(tx: Transaction, ref: DocumentReference, userId: str
 
   if (!current || oldProject) changeCount(tx, project, 1);
   if (oldProject) changeCount(tx, oldProject, -1);
-  if (current) tx.update(ref, { ...fields });
-  else tx.create(ref, { ...fields, userId });
+  if (current) tx.update(ref, { ...fields, ...payment });
+  else tx.create(ref, { ...fields, ...payment, userId });
 }
 
 export async function importInvoice(userId: string, input: unknown) {
@@ -146,9 +164,13 @@ export async function updateStatus(collection: Collection, userId: string, id: s
   const status = validateStatus(collection, input);
   const db = getAdminFirestore();
   const ref = db.collection(collection).doc(id);
+  const today = todayInParis();
   await db.runTransaction(async tx => {
-    await owned(tx, ref, userId);
-    tx.update(ref, { status });
+    const current = await owned(tx, ref, userId);
+    const payment = collection === "invoices"
+      ? invoicePaymentFields({ issued_on: current.issued_on, status: status as InvoiceStatus }, current, today)
+      : {};
+    tx.update(ref, { status, ...payment });
   });
 }
 
